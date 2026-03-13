@@ -4,7 +4,7 @@ Automated verification of Texas alcohol licenses against the [TABC Public Search
 
 ## Architecture
 
-This project implements Part 2 of the WMT License Solution Architecture. It receives extracted license data (from Document AI in Part 1) and verifies it against the TABC government website.
+This project implements Part 2 of the License Solution Architecture. It receives extracted license data (from Document AI in Part 1) and verifies it against the TABC government website.
 
 ![Solution Architecture](imgs/flow.png)
 
