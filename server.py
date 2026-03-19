@@ -44,6 +44,7 @@ from backend.models import (
 from backend import defense_line_1_http as line1
 from backend import defense_line_2_scraper as line2
 from backend import defense_line_3_agent as line3
+from backend.document_ai import extract_fields, build_search_fields
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -296,26 +297,55 @@ async def verify_upload(
     state: str = Form(...),
 ):
     """
-    Single File Mode: upload a license PDF/image, extract license number
-    (placeholder — in production this calls Document AI), then kick off
-    the defense line cascade.
+    Single File Mode: upload a license PDF/image, send to Document AI
+    for field extraction, and return extracted fields with confidence scores.
 
-    Returns a job_id; the client subscribes to /api/verify/status for SSE.
+    The frontend displays these in the review form (HITL step) before
+    the user triggers the websearch cascade.
     """
-    global _single_state
+    file_bytes = await file.read()
+    filename = file.filename or "unknown"
 
-    # TODO: In production, send the file to Document AI to extract fields.
-    # For now, the user manually provides the license number via the form.
-    # We read the file but don't process it yet.
-    _file_bytes = await file.read()
-    _filename = file.filename
+    # Determine MIME type
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        mime_type = "application/pdf"
+    elif lower.endswith((".jpg", ".jpeg")):
+        mime_type = "image/jpeg"
+    elif lower.endswith(".png"):
+        mime_type = "image/png"
+    elif lower.endswith(".tiff"):
+        mime_type = "image/tiff"
+    elif lower.endswith(".webp"):
+        mime_type = "image/webp"
+    else:
+        mime_type = file.content_type or "application/octet-stream"
 
-    return {
-        "message": "File received. Use /api/verify/start to begin cascade.",
-        "filename": _filename,
-        "state": state,
-        "size_bytes": len(_file_bytes),
-    }
+    try:
+        extraction = extract_fields(file_bytes, mime_type)
+        search_fields = build_search_fields(extraction)
+
+        # Override state if jurisdiction was extracted with high confidence
+        if search_fields["state"]["value"]:
+            resolved_state = search_fields["state"]["value"]
+        else:
+            resolved_state = state
+
+        return {
+            "filename": filename,
+            "state": resolved_state,
+            "size_bytes": len(file_bytes),
+            "fields": search_fields,
+        }
+    except Exception as e:
+        logging.error(f"Document AI extraction failed: {e}")
+        return {
+            "filename": filename,
+            "state": state,
+            "size_bytes": len(file_bytes),
+            "fields": None,
+            "error": f"Extraction failed: {str(e)}",
+        }
 
 
 @app.post("/api/verify/start")

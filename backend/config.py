@@ -63,7 +63,7 @@ TEXAS = StateConfig(
     },
     http_response_fields={
         "StringLicLocId": "license_number",
-        "LicDBA": "trade_name",
+        "LicDBA": "doing_business_as",
         "LicAddressLine1": "location_address",
         "City": "city",
         "State": "state",
@@ -72,7 +72,7 @@ TEXAS = StateConfig(
     has_business_type_dropdown=True,
     result_row_selector="tbody tr.k-master-row",
     grid_column_map=[
-        "license_number", "trade_name", "location_address",
+        "license_number", "doing_business_as", "location_address",
         "city", "state", "expiration_date",
     ],
 )
@@ -85,16 +85,58 @@ FLORIDA = StateConfig(
     name="Florida",
     code="FL",
     base_url="https://www.myfloridalicense.com",
-    search_page="https://www.myfloridalicense.com/wl11.asp?mode=0&SID=&bession_id=",
-    search_endpoint="",  # TODO: discover the actual endpoint
-    business_type_value="",
-    field_ids={},         # TODO: map the form fields
-    result_columns=[],
-    http_payload_fields={},
+    search_page="https://www.myfloridalicense.com/wl11.asp?mode=1&SID=&brd=&typ=&search=LicNbr",
+    search_endpoint="https://www.myfloridalicense.com/wl11.asp?mode=2&search=LicNbr&SID=&brd=&typ=",
+    business_type_value="400",  # Alcoholic Beverages & Tobacco
+    field_ids={
+        "license_number": "LicNbr",
+        "search_button": "Search1",
+        "result_grid": "",  # Florida uses flat HTML tables, not a grid widget
+    },
+    result_columns=[
+        "license_type", "name", "name_type", "license_number_rank", "status_expires",
+    ],
+    http_payload_fields={
+        "license_number": "LicNbr",
+    },
+    http_response_fields={},  # Florida returns HTML, not JSON — parsed separately
+    has_business_type_dropdown=False,
+    result_row_selector="table[bgcolor='#f1f1f1'] tr[height='40']",
+    grid_column_map=[
+        "license_type", "doing_business_as", "name_type", "license_number", "status_expires",
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Georgia (DOR) — placeholder, fill in when ready
+# ---------------------------------------------------------------------------
+
+GEORGIA = StateConfig(
+    name="Georgia",
+    code="GA",
+    base_url="https://gtc.dor.ga.gov",
+    search_page="https://gtc.dor.ga.gov/_/#2",
+    search_endpoint="",  # JS SPA — no direct HTTP endpoint; Playwright only
+    business_type_value="LICALL",  # Alcohol License radio button value
+    field_ids={
+        "license_type_radio": "Dd-b_0",       # Alcohol License radio
+        "license_number": "Dd-f",              # License Number input
+        "address": "Dd-g",                     # License Address input
+        "business_name": "Dd-h",               # Business / Licensee Name input
+        "search_button": "Dd-k",               # Search button
+    },
+    result_columns=[
+        "name", "address", "license_number", "license_type",
+        "taxing_jurisdiction", "status", "additional_info",
+    ],
+    http_payload_fields={},      # No HTTP direct — JS SPA
     http_response_fields={},
-    has_business_type_dropdown=False,  # Florida's form works differently
-    result_row_selector="",           # TODO: discover the grid structure
-    grid_column_map=[],
+    has_business_type_dropdown=False,  # Uses radio buttons, not dropdown
+    result_row_selector="table#Dd-51 tbody.DocTableBody tr.TDR",
+    grid_column_map=[
+        "doing_business_as", "location_address", "license_number",
+        "license_type", "taxing_jurisdiction", "status",
+    ],
 )
 
 # ---------------------------------------------------------------------------
@@ -104,6 +146,7 @@ FLORIDA = StateConfig(
 STATE_CONFIGS: dict[str, StateConfig] = {
     "TX": TEXAS,
     "FL": FLORIDA,
+    "GA": GEORGIA,
 }
 
 SUPPORTED_STATES = list(STATE_CONFIGS.keys())

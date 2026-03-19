@@ -9,3 +9,4 @@ google-cloud-aiplatform>=1.74.0
 termcolor>=3.1.0
 rich>=13.0
 python-dotenv>=1.0.0
+google-cloud-documentai>=3.0.0

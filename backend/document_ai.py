@@ -1,0 +1,262 @@
+"""
+Document AI extraction for alcohol license documents.
+
+Sends uploaded files to a Document AI custom extractor and returns
+structured fields with confidence scores.
+"""
+
+import logging
+import re
+from dataclasses import dataclass
+
+from google.api_core.client_options import ClientOptions
+from google.cloud import documentai
+
+logger = logging.getLogger(__name__)
+
+PROJECT_ID = "757654702990"
+LOCATION = "us"
+PROCESSOR_ID = "d426bbd65fc4de7d"
+PROCESSOR_VERSION = "dc75b1a1b698c784"
+
+EXPECTED_FIELDS = [
+    "doing_business_as",
+    "expiration_date",
+    "jurisdiction",
+    "legal_name",
+    "license_number",
+    "license_type",
+    "location_address",
+]
+
+# Maps jurisdiction strings to state codes
+JURISDICTION_TO_STATE = {
+    "texas alcoholic beverage commission": "TX",
+    "tabc": "TX",
+    "florida dbpr": "FL",
+    "florida department of business and professional regulation": "FL",
+    "state of georgia - department of revenue": "GA",
+    "georgia department of revenue": "GA",
+}
+
+# Per-state transforms for license numbers (applied before websearch)
+LICENSE_NUMBER_TRANSFORMS: dict[str, list[tuple[str, str]]] = {
+    "TX": [(r"^[A-Za-z]+-?", "")],  # Strip letter prefixes like "P-"
+}
+
+
+@dataclass
+class ExtractedField:
+    value: str
+    confidence: float
+
+
+@dataclass
+class ExtractionResult:
+    fields: dict[str, ExtractedField]
+    raw_text: str
+
+
+def _get_client() -> documentai.DocumentProcessorServiceClient:
+    opts = ClientOptions(api_endpoint=f"{LOCATION}-documentai.googleapis.com")
+    return documentai.DocumentProcessorServiceClient(client_options=opts)
+
+
+def extract_fields(file_bytes: bytes, mime_type: str) -> ExtractionResult:
+    """Send a document to Document AI and return extracted fields with confidence."""
+    client = _get_client()
+
+    name = client.processor_version_path(
+        PROJECT_ID, LOCATION, PROCESSOR_ID, PROCESSOR_VERSION
+    )
+
+    raw_document = documentai.RawDocument(content=file_bytes, mime_type=mime_type)
+
+    request = documentai.ProcessRequest(
+        name=name,
+        raw_document=raw_document,
+        field_mask="text,entities",
+        process_options=documentai.ProcessOptions(
+            individual_page_selector=documentai.ProcessOptions.IndividualPageSelector(
+                pages=[1]
+            )
+        ),
+    )
+
+    result = client.process_document(request=request)
+    document = result.document
+
+    fields: dict[str, ExtractedField] = {}
+    for entity in document.entities:
+        field_name = entity.type_
+        if field_name in EXPECTED_FIELDS:
+            fields[field_name] = ExtractedField(
+                value=entity.mention_text.strip(),
+                confidence=round(entity.confidence, 4),
+            )
+
+    # Log raw Document AI prediction
+    logger.info("--- Document AI Raw Prediction ---")
+    for entity in document.entities:
+        logger.info(
+            "  %-25s  conf=%.4f  value=%r",
+            entity.type_, entity.confidence, entity.mention_text.strip(),
+        )
+    logger.info("--- End Prediction ---")
+
+    # Fill missing fields with empty values
+    for field_name in EXPECTED_FIELDS:
+        if field_name not in fields:
+            fields[field_name] = ExtractedField(value="", confidence=0.0)
+
+    return ExtractionResult(fields=fields, raw_text=document.text)
+
+
+def resolve_state_code(jurisdiction: str) -> str:
+    """Map a jurisdiction string to a 2-letter state code."""
+    key = jurisdiction.strip().lower()
+    for pattern, code in JURISDICTION_TO_STATE.items():
+        if pattern in key:
+            return code
+    return ""
+
+
+def transform_license_number(license_number: str, state: str) -> str:
+    """Apply state-specific transforms to the license number for websearch."""
+    transforms = LICENSE_NUMBER_TRANSFORMS.get(state, [])
+    result = license_number
+    for pattern, replacement in transforms:
+        result = re.sub(pattern, replacement, result)
+    return result.strip()
+
+
+def parse_location_address(address: str) -> tuple[str, str]:
+    """Split a full address into (street_address, city).
+
+    Handles formats like:
+      "5330 N MacArthur Blvd Suite 112, Irving, TX"
+      "3163 WEST HALLANDALE BEACH BLVD, PEMBROKE PARK, FL, 33009"
+      "500 S ERVAY ST, STE 120 DALLAS, TX, US, 75201"
+    """
+    if not address:
+        return ("", "")
+
+    parts = [p.strip() for p in address.split(",")]
+
+    # Strip trailing parts that are zip codes, country codes, or state codes
+    # Walk backwards to find the city
+    while len(parts) > 2 and _is_suffix(parts[-1]):
+        parts.pop()
+
+    # Now parts[-1] should be the city, everything before is street
+    if len(parts) >= 2:
+        city = parts[-1]
+        street = ", ".join(parts[:-1])
+        return (street, city)
+
+    return (address, "")
+
+
+def _is_suffix(s: str) -> bool:
+    """Check if a comma-separated part is a state code, zip, or country code."""
+    s = s.strip()
+    if re.match(r"^\d{5}(-\d{4})?$", s):  # ZIP
+        return True
+    if re.match(r"^[A-Z]{2}$", s):  # State code or country code (US, TX, FL, etc.)
+        return True
+    if s.upper() in ("US", "USA", "UNITED STATES"):
+        return True
+    return False
+
+
+def normalize_date(date_str: str) -> str:
+    """Normalize date strings to MM/DD/YYYY for websearch matching.
+
+    Handles common Doc AI output formats:
+      "2025-08-31"        -> "08/31/2025"
+      "08/31/2025"        -> "08/31/2025"  (already correct)
+      "August 31, 2025"   -> "08/31/2025"
+      "31-Aug-2025"       -> "08/31/2025"
+    """
+    if not date_str:
+        return ""
+
+    from datetime import datetime
+
+    date_str = date_str.strip()
+
+    # Try common formats
+    for fmt in (
+        "%Y-%m-%d",       # 2025-08-31
+        "%m/%d/%Y",       # 08/31/2025
+        "%m-%d-%Y",       # 08-31-2025
+        "%B %d, %Y",      # August 31, 2025
+        "%b %d, %Y",      # Aug 31, 2025
+        "%d-%b-%Y",       # 31-Aug-2025
+        "%d %B %Y",       # 31 August 2025
+        "%Y/%m/%d",       # 2025/08/31
+    ):
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            return dt.strftime("%m/%d/%Y")
+        except ValueError:
+            continue
+
+    # If nothing matched, return as-is
+    return date_str
+
+
+def build_search_fields(extraction: ExtractionResult) -> dict:
+    """Transform extracted fields into the format needed for websearch.
+
+    Returns a dict with both the search-ready fields and confidence scores.
+    """
+    fields = extraction.fields
+
+    state = resolve_state_code(fields["jurisdiction"].value)
+    raw_license = fields["license_number"].value
+    search_license = transform_license_number(raw_license, state)
+    street, city = parse_location_address(fields["location_address"].value)
+    raw_date = fields["expiration_date"].value
+    parsed_date = normalize_date(raw_date)
+
+    return {
+        "license_number": {
+            "value": search_license,
+            "raw_value": raw_license,
+            "confidence": fields["license_number"].confidence,
+        },
+        "doing_business_as": {
+            "value": fields["doing_business_as"].value,
+            "confidence": fields["doing_business_as"].confidence,
+        },
+        "legal_name": {
+            "value": fields["legal_name"].value,
+            "confidence": fields["legal_name"].confidence,
+        },
+        "license_type": {
+            "value": fields["license_type"].value,
+            "confidence": fields["license_type"].confidence,
+        },
+        "expiration_date": {
+            "value": parsed_date,
+            "raw_value": raw_date if raw_date != parsed_date else None,
+            "confidence": fields["expiration_date"].confidence,
+        },
+        "address": {
+            "value": street,
+            "confidence": fields["location_address"].confidence,
+        },
+        "city": {
+            "value": city,
+            "confidence": fields["location_address"].confidence,
+        },
+        "state": {
+            "value": state,
+            "confidence": fields["jurisdiction"].confidence,
+        },
+        "jurisdiction": {
+            "value": fields["jurisdiction"].value,
+            "confidence": fields["jurisdiction"].confidence,
+        },
+    }

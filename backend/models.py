@@ -13,7 +13,7 @@ class DefenseLine(IntEnum):
 
 
 class LicenseSearchRequest(BaseModel):
-    license_number: str = Field(..., max_length=9, pattern=r"^\d+$")
+    license_number: str = Field(..., max_length=20, pattern=r"^[A-Za-z0-9\-]+$")
     state: str = Field("TX", max_length=2)
     trade_name: Optional[str] = Field(None, max_length=50)
     address: Optional[str] = None
@@ -27,12 +27,21 @@ class BatchSearchRequest(BaseModel):
 
 
 class LicenseResult(BaseModel):
+    # Core fields (consistent across all states)
     license_number: Optional[str] = None
-    trade_name: Optional[str] = None
+    legal_name: Optional[str] = None
+    doing_business_as: Optional[str] = None
+    license_type: Optional[str] = None
+    expiration_date: Optional[str] = None
+    jurisdiction: Optional[str] = None
     location_address: Optional[str] = None
+
+    # Structural fields (used internally)
     city: Optional[str] = None
     state: Optional[str] = None
-    expiration_date: Optional[str] = None
+
+    # State-specific extra details (nested to avoid null noise)
+    extra_details: dict[str, str] = {}
 
 
 class VerificationResponse(BaseModel):

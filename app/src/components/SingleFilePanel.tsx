@@ -1,17 +1,32 @@
 import { useState, useRef, useMemo } from "react";
-import { startVerification, subscribeVerifyStatus, type CascadeEvent } from "../services/apiClient";
+import {
+  startVerification,
+  subscribeVerifyStatus,
+  extractDocument,
+  type CascadeEvent,
+  type FieldWithConfidence,
+} from "../services/apiClient";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+interface FieldEntry {
+  value: string;
+  raw_value?: string;
+  confidence: number;
+}
+
 interface ExtractedFields {
-  permit_type: string;
-  license_number: string;
-  trade_name: string;
-  address: string;
-  city: string;
-  state: string;
+  license_number: FieldEntry;
+  doing_business_as: FieldEntry;
+  legal_name: FieldEntry;
+  license_type: FieldEntry;
+  expiration_date: FieldEntry;
+  address: FieldEntry;
+  city: FieldEntry;
+  state: FieldEntry;
+  jurisdiction: FieldEntry;
 }
 
 interface DefenseStep {
@@ -64,19 +79,33 @@ const STATUS_CONFIG: Record<string, { color: string; bg: string; border: string;
 const STATE_OPTIONS = [
   { code: "TX", name: "Texas", tag: "TABC" },
   { code: "FL", name: "Florida", tag: "DBPR" },
+  { code: "GA", name: "Georgia", tag: "DOR" },
 ];
 
 // Type is always "License" — maps to ddlBusinessType value "2" on TABC site
 const BUSINESS_TYPE = "License";
 
-// Placeholder values that simulate what Document AI would extract
-const PLACEHOLDER_FIELDS: ExtractedFields = {
-  permit_type: "P",
-  license_number: "200034858",
-  trade_name: "ALCOHAUL BEER SPIRITS WINE",
-  address: "5330 N MACARTHUR BLVD, SUITE 112",
-  city: "IRVING",
-  state: "TX",
+const CONFIDENCE_THRESHOLD_LOW = 0.5;
+const CONFIDENCE_THRESHOLD_HIGH = 0.8;
+
+function confidenceColor(c: number): { dot: string; border: string; label: string } {
+  if (c >= CONFIDENCE_THRESHOLD_HIGH) return { dot: "bg-green-400", border: "border-green-500/40", label: "High" };
+  if (c >= CONFIDENCE_THRESHOLD_LOW) return { dot: "bg-amber-400", border: "border-amber-500/40", label: "Medium" };
+  return { dot: "bg-red-400", border: "border-red-500/40", label: "Low" };
+}
+
+const EMPTY_FIELD: FieldEntry = { value: "", confidence: 0 };
+
+const EMPTY_FIELDS: ExtractedFields = {
+  license_number: { ...EMPTY_FIELD },
+  doing_business_as: { ...EMPTY_FIELD },
+  legal_name: { ...EMPTY_FIELD },
+  license_type: { ...EMPTY_FIELD },
+  expiration_date: { ...EMPTY_FIELD },
+  address: { ...EMPTY_FIELD },
+  city: { ...EMPTY_FIELD },
+  state: { ...EMPTY_FIELD },
+  jurisdiction: { ...EMPTY_FIELD },
 };
 
 // ---------------------------------------------------------------------------
@@ -98,7 +127,9 @@ const SingleFilePanel: React.FC = () => {
   const isPdf = file?.type === "application/pdf";
 
   // Review step — extracted fields (editable)
-  const [fields, setFields] = useState<ExtractedFields>(PLACEHOLDER_FIELDS);
+  const [fields, setFields] = useState<ExtractedFields>(EMPTY_FIELDS);
+  const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
 
   // Method selection
   const [selectedMethod, setSelectedMethod] = useState<number | null>(null);
@@ -115,17 +146,49 @@ const SingleFilePanel: React.FC = () => {
     if (f) setFile(f);
   };
 
-  const handleUploadNext = () => {
-    // In production: send file to Document AI, get extracted fields back.
-    // For now: use placeholder values and let user edit.
-    setFields({ ...PLACEHOLDER_FIELDS, state: selectedState });
-    setCurrentView("review");
+  const handleUploadNext = async () => {
+    if (!file) {
+      // No file — go to review with empty fields for manual entry
+      setFields({ ...EMPTY_FIELDS, state: { value: selectedState, confidence: 1 } });
+      setExtractionError(null);
+      setCurrentView("review");
+      return;
+    }
+
+    setExtracting(true);
+    setExtractionError(null);
+    try {
+      const resp = await extractDocument(file, selectedState);
+      if (resp.error || !resp.fields) {
+        setExtractionError(resp.error || "No fields returned");
+        setFields({ ...EMPTY_FIELDS, state: { value: selectedState, confidence: 1 } });
+      } else {
+        const f = resp.fields;
+        setFields({
+          license_number: f.license_number || EMPTY_FIELD,
+          doing_business_as: f.doing_business_as || EMPTY_FIELD,
+          legal_name: f.legal_name || EMPTY_FIELD,
+          license_type: f.license_type || EMPTY_FIELD,
+          expiration_date: f.expiration_date || EMPTY_FIELD,
+          address: f.address || EMPTY_FIELD,
+          city: f.city || EMPTY_FIELD,
+          state: f.state?.value ? f.state : { value: selectedState, confidence: 1 },
+          jurisdiction: f.jurisdiction || EMPTY_FIELD,
+        });
+      }
+      setCurrentView("review");
+    } catch (err: any) {
+      setExtractionError(err.message || "Extraction failed");
+    } finally {
+      setExtracting(false);
+    }
   };
 
   const handleBackToUpload = () => {
     setCurrentView("upload");
     setSteps(INITIAL_STEPS.map((s) => ({ ...s, status: "idle", error: undefined, result: undefined })));
     setFinalResult(null);
+    setExtractionError(null);
   };
 
   const handleStartVerification = async () => {
@@ -134,8 +197,18 @@ const SingleFilePanel: React.FC = () => {
     setFinalResult(null);
     setSteps(INITIAL_STEPS.map((s) => ({ ...s, status: "idle", error: undefined, result: undefined })));
 
+    // Flatten fields for the verification API (which expects simple strings)
+    const flatFields = {
+      permit_type: fields.license_type.value,
+      license_number: fields.license_number.value,
+      doing_business_as: fields.doing_business_as.value,
+      address: fields.address.value,
+      city: fields.city.value,
+      state: fields.state.value,
+    };
+
     try {
-      await startVerification(fields.license_number.trim(), fields.state, fields, selectedMethod);
+      await startVerification(fields.license_number.value.trim(), fields.state.value, flatFields, selectedMethod);
 
       const ctrl = subscribeVerifyStatus(
         (event: CascadeEvent) => {
@@ -173,7 +246,10 @@ const SingleFilePanel: React.FC = () => {
   };
 
   const updateField = (key: keyof ExtractedFields, value: string) => {
-    setFields((prev) => ({ ...prev, [key]: value }));
+    setFields((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], value },
+    }));
   };
 
   // -------------------------------------------------------------------------
@@ -249,11 +325,27 @@ const SingleFilePanel: React.FC = () => {
 
             <button
               onClick={handleUploadNext}
-              className="w-full py-3 bg-primary text-white font-bold text-sm rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
+              disabled={extracting}
+              className="w-full py-3 bg-primary text-white font-bold text-sm rounded-lg hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >
-              <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
-              {file ? "Extract & Review Fields" : "Enter Fields Manually"}
+              {extracting ? (
+                <>
+                  <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
+                  Extracting with Document AI...
+                </>
+              ) : (
+                <>
+                  <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                  {file ? "Extract & Review Fields" : "Enter Fields Manually"}
+                </>
+              )}
             </button>
+
+            {extractionError && (
+              <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
+                <strong>Extraction error:</strong> {extractionError}
+              </div>
+            )}
 
             {!file && (
               <p className="text-xs text-center text-slate-500 mt-3">
@@ -317,14 +409,15 @@ const SingleFilePanel: React.FC = () => {
           </div>
           <p className="text-xs text-slate-500 mb-5 ml-7">
             Review and edit the fields below before running verification.
+            Fields are color-coded by extraction confidence.
           </p>
 
-          {/* Placeholder banner */}
-          <div className="mb-5 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-start gap-2">
-            <span className="material-symbols-outlined text-[18px] text-amber-400 mt-0.5">info</span>
-            <div className="text-xs text-amber-300">
-              <strong>Document AI not connected yet.</strong> These are placeholder values.
-              In production, fields will be auto-extracted from the uploaded file.
+          {/* Confidence legend */}
+          <div className="mb-4 p-3 bg-[#1a1d23] border border-[#2a2d35] rounded-lg">
+            <div className="flex items-center gap-4 text-xs text-slate-400">
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-400"></span> High (&ge;0.8)</span>
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400"></span> Medium (0.5–0.8)</span>
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400"></span> Low (&lt;0.5)</span>
             </div>
           </div>
 
@@ -340,76 +433,167 @@ const SingleFilePanel: React.FC = () => {
           )}
 
           <div className="space-y-4">
-            {/* Type (hardcoded) */}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Type</label>
-              <input
-                type="text"
-                value={BUSINESS_TYPE}
-                disabled
-                className="w-full px-3 py-2 border border-[#2a2d35] rounded-lg text-sm bg-[#1a1d23] text-slate-500"
-              />
-            </div>
-
             {/* License Number */}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                License / Permit Number
-              </label>
-              <input
-                type="text"
-                value={fields.license_number}
-                onChange={(e) => updateField("license_number", e.target.value)}
-                className="w-full px-3 py-2 border border-[#3a3d45] rounded-lg text-sm font-mono bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                maxLength={9}
-              />
-            </div>
+            {(() => {
+              const cc = confidenceColor(fields.license_number.confidence);
+              return (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-sm font-medium text-slate-300">License / Permit Number</label>
+                    <span className={`w-2 h-2 rounded-full ml-auto ${cc.dot}`}></span>
+                  </div>
+                  <input
+                    type="text"
+                    value={fields.license_number.value}
+                    onChange={(e) => updateField("license_number", e.target.value)}
+                    className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm font-mono bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                  />
+                  {fields.license_number.raw_value && fields.license_number.raw_value !== fields.license_number.value && (
+                    <p className="text-[10px] text-slate-500 mt-0.5">Raw: {fields.license_number.raw_value}</p>
+                  )}
+                </div>
+              );
+            })()}
 
-            {/* Trade Name */}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Trade Name</label>
-              <input
-                type="text"
-                value={fields.trade_name}
-                onChange={(e) => updateField("trade_name", e.target.value)}
-                className="w-full px-3 py-2 border border-[#3a3d45] rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
+            {/* Doing Business As (DBA) */}
+            {(() => {
+              const cc = confidenceColor(fields.doing_business_as.confidence);
+              return (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-sm font-medium text-slate-300">Doing Business As</label>
+                    <span className={`w-2 h-2 rounded-full ml-auto ${cc.dot}`}></span>
+                  </div>
+                  <input
+                    type="text"
+                    value={fields.doing_business_as.value}
+                    onChange={(e) => updateField("doing_business_as", e.target.value)}
+                    className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                  />
+                </div>
+              );
+            })()}
+
+            {/* Legal Name */}
+            {(() => {
+              const cc = confidenceColor(fields.legal_name.confidence);
+              return (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-sm font-medium text-slate-300">Legal Name</label>
+                    <span className={`w-2 h-2 rounded-full ml-auto ${cc.dot}`}></span>
+                  </div>
+                  <input
+                    type="text"
+                    value={fields.legal_name.value}
+                    onChange={(e) => updateField("legal_name", e.target.value)}
+                    className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                  />
+                </div>
+              );
+            })()}
+
+            {/* License Type */}
+            {(() => {
+              const cc = confidenceColor(fields.license_type.confidence);
+              return (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-sm font-medium text-slate-300">License Type</label>
+                    <span className={`w-2 h-2 rounded-full ml-auto ${cc.dot}`}></span>
+                  </div>
+                  <input
+                    type="text"
+                    value={fields.license_type.value}
+                    onChange={(e) => updateField("license_type", e.target.value)}
+                    className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                  />
+                </div>
+              );
+            })()}
+
+            {/* Expiration Date */}
+            {(() => {
+              const cc = confidenceColor(fields.expiration_date.confidence);
+              return (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-sm font-medium text-slate-300">Expiration Date</label>
+                    <span className={`w-2 h-2 rounded-full ml-auto ${cc.dot}`}></span>
+                  </div>
+                  <input
+                    type="text"
+                    value={fields.expiration_date.value}
+                    onChange={(e) => updateField("expiration_date", e.target.value)}
+                    className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                  />
+                </div>
+              );
+            })()}
 
             {/* Address */}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                License Location Address
-              </label>
-              <input
-                type="text"
-                value={fields.address}
-                onChange={(e) => updateField("address", e.target.value)}
-                className="w-full px-3 py-2 border border-[#3a3d45] rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
+            {(() => {
+              const cc = confidenceColor(fields.address.confidence);
+              return (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-sm font-medium text-slate-300">Location Address</label>
+                    <span className={`w-2 h-2 rounded-full ml-auto ${cc.dot}`}></span>
+                  </div>
+                  <input
+                    type="text"
+                    value={fields.address.value}
+                    onChange={(e) => updateField("address", e.target.value)}
+                    className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                  />
+                </div>
+              );
+            })()}
 
             {/* City + State */}
             <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-slate-300 mb-1">City</label>
-                <input
-                  type="text"
-                  value={fields.city}
-                  onChange={(e) => updateField("city", e.target.value)}
-                  className="w-full px-3 py-2 border border-[#3a3d45] rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
+              {(() => {
+                const cc = confidenceColor(fields.city.confidence);
+                return (
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`w-2 h-2 rounded-full ${cc.dot}`}></span>
+                      <label className="text-sm font-medium text-slate-300">City</label>
+                    </div>
+                    <input
+                      type="text"
+                      value={fields.city.value}
+                      onChange={(e) => updateField("city", e.target.value)}
+                      className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                    />
+                  </div>
+                );
+              })()}
               <div className="w-20">
-                <label className="block text-sm font-medium text-slate-300 mb-1">State</label>
+                <div className="flex items-center gap-2 mb-1">
+                  <label className="text-sm font-medium text-slate-300">State</label>
+                </div>
                 <input
                   type="text"
-                  value={fields.state}
+                  value={fields.state.value}
                   disabled
                   className="w-full px-3 py-2 border border-[#2a2d35] rounded-lg text-sm bg-[#1a1d23] text-slate-500 font-mono"
                 />
               </div>
             </div>
+
+            {/* Jurisdiction (read-only context) */}
+            {fields.jurisdiction.value && (
+              <div>
+                <label className="block text-sm font-medium text-slate-500 mb-1">Jurisdiction</label>
+                <input
+                  type="text"
+                  value={fields.jurisdiction.value}
+                  disabled
+                  className="w-full px-3 py-2 border border-[#2a2d35] rounded-lg text-sm bg-[#1a1d23] text-slate-500"
+                />
+              </div>
+            )}
           </div>
 
           {/* Verification method selector */}
@@ -432,7 +616,7 @@ const SingleFilePanel: React.FC = () => {
 
           <button
             onClick={handleStartVerification}
-            disabled={!fields.license_number.trim()}
+            disabled={!fields.license_number.value.trim()}
             className="w-full mt-4 py-3 bg-success text-white font-bold text-sm rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
           >
             <span className="material-symbols-outlined text-[18px]">play_arrow</span>
@@ -448,19 +632,24 @@ const SingleFilePanel: React.FC = () => {
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-slate-500 w-32">Website:</span>
                 <span className="font-mono text-xs text-primary">
-                  {fields.state === "TX"
+                  {fields.state.value === "TX"
                     ? "tabcaims.elicense365.com"
-                    : "myfloridalicense.com"}
+                    : fields.state.value === "FL"
+                    ? "myfloridalicense.com"
+                    : "dor.georgia.gov"}
                 </span>
               </div>
               <hr className="border-[#2a2d35]" />
               {[
                 { label: "Type", value: BUSINESS_TYPE },
-                { label: "License #", value: fields.license_number },
-                { label: "Trade Name", value: fields.trade_name },
-                { label: "Address", value: fields.address },
-                { label: "City", value: fields.city },
-                { label: "State", value: fields.state },
+                { label: "License #", value: fields.license_number.value },
+                { label: "Doing Business As", value: fields.doing_business_as.value },
+                { label: "Legal Name", value: fields.legal_name.value },
+                { label: "License Type", value: fields.license_type.value },
+                { label: "Expiration", value: fields.expiration_date.value },
+                { label: "Address", value: fields.address.value },
+                { label: "City", value: fields.city.value },
+                { label: "State", value: fields.state.value },
               ].map((row) => (
                 <div key={row.label} className="flex items-start gap-2 text-sm">
                   <span className="text-slate-500 w-32 flex-shrink-0">{row.label}:</span>
@@ -509,10 +698,10 @@ const SingleFilePanel: React.FC = () => {
         <div className="bg-[#1a1d23] border border-[#2a2d35] rounded-xl p-4 space-y-2 text-sm">
           {[
             { label: "Type", value: BUSINESS_TYPE },
-            { label: "License #", value: fields.license_number },
-            { label: "Trade Name", value: fields.trade_name },
-            { label: "Address", value: fields.address },
-            { label: "City, State", value: `${fields.city}, ${fields.state}` },
+            { label: "License #", value: fields.license_number.value },
+            { label: "Doing Business As", value: fields.doing_business_as.value },
+            { label: "Address", value: fields.address.value },
+            { label: "City, State", value: `${fields.city.value}, ${fields.state.value}` },
           ].map((row) => (
             <div key={row.label} className="flex gap-2">
               <span className="text-slate-500 w-24 flex-shrink-0 text-xs">{row.label}</span>
