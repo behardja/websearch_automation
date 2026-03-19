@@ -58,11 +58,12 @@ async def search_license(
             # Step 1: Navigate to search page
             await page.goto(cfg.search_page, wait_until="networkidle")
 
-            # Step 2: Select "License" from the business type dropdown
-            await page.select_option(
-                f"#{fids['business_type']}",
-                value=cfg.business_type_value,
-            )
+            # Step 2: Select business type from dropdown (if this state has one)
+            if cfg.has_business_type_dropdown and "business_type" in fids:
+                await page.select_option(
+                    f"#{fids['business_type']}",
+                    value=cfg.business_type_value,
+                )
 
             # Wait for the license search fields to appear
             await page.wait_for_selector(f"#{fids['license_number']}", state="visible")
@@ -82,11 +83,12 @@ async def search_license(
 
             # Step 5: Wait for results grid to populate
             grid_id = fids.get("result_grid", "grdLicense")
+            row_selector = cfg.result_row_selector or "tbody tr.k-master-row"
             await page.wait_for_load_state("networkidle")
             # Wait for at least one data row to appear in the grid
             try:
                 await page.wait_for_selector(
-                    f"#{grid_id} tbody tr.k-master-row",
+                    f"#{grid_id} {row_selector}",
                     state="visible",
                     timeout=10000,
                 )
@@ -94,7 +96,7 @@ async def search_license(
                 pass  # No results found — that's ok, we'll return empty
 
             # Step 6: Parse results from the DOM
-            results = await _parse_license_grid(page, grid_id)
+            results = await _parse_license_grid(page, grid_id, row_selector, cfg.grid_column_map)
 
             return VerificationResponse(
                 license_number=license_number,
@@ -116,21 +118,28 @@ async def search_license(
             await browser.close()
 
 
-async def _parse_license_grid(page, grid_id: str) -> list[LicenseResult]:
-    """Extract rows from the license Kendo UI grid (#grdLicense).
+async def _parse_license_grid(
+    page,
+    grid_id: str,
+    row_selector: str = "tbody tr.k-master-row",
+    column_map: list[str] | None = None,
+) -> list[LicenseResult]:
+    """Extract rows from the results grid using config-driven column mapping.
 
-    Grid columns (visible):
-      0: EncLicenceNumber (hidden via display:none)
-      1: License Number (StringLicLocId)
-      2: Trade Name (LicDBA)
-      3: Lic/Reg Location (LicAddressLine1)
-      4: City
-      5: State
-      6: Lic Expiration Date (LicExpirationDate)
+    column_map is a list of LicenseResult field names in display order, e.g.:
+        ["license_number", "trade_name", "location_address", "city", "state", "expiration_date"]
+
+    Hidden cells (display:none) are skipped automatically.
     """
-    results = []
+    # Default column order (matches Texas TABC)
+    if not column_map:
+        column_map = [
+            "license_number", "trade_name", "location_address",
+            "city", "state", "expiration_date",
+        ]
 
-    rows = await page.query_selector_all(f"#{grid_id} tbody tr.k-master-row")
+    results = []
+    rows = await page.query_selector_all(f"#{grid_id} {row_selector}")
 
     for row in rows:
         cells = await row.query_selector_all("td")
@@ -138,26 +147,22 @@ async def _parse_license_grid(page, grid_id: str) -> list[LicenseResult]:
         # Extract visible text from each cell
         cell_texts = []
         for cell in cells:
-            # Skip hidden cells (EncLicenceNumber)
             is_hidden = await cell.evaluate("el => el.style.display === 'none'")
             if is_hidden:
                 continue
             text = await cell.inner_text()
             cell_texts.append(text.strip())
 
-        if len(cell_texts) < 4:
+        if len(cell_texts) < 2:
             continue
 
-        results.append(
-            LicenseResult(
-                license_number=cell_texts[0] if len(cell_texts) > 0 else None,
-                trade_name=cell_texts[1] if len(cell_texts) > 1 else None,
-                location_address=cell_texts[2] if len(cell_texts) > 2 else None,
-                city=cell_texts[3] if len(cell_texts) > 3 else None,
-                state=cell_texts[4] if len(cell_texts) > 4 else None,
-                expiration_date=cell_texts[5] if len(cell_texts) > 5 else None,
-            )
-        )
+        # Map cell values to LicenseResult fields using column_map
+        mapped = {}
+        for i, field_name in enumerate(column_map):
+            if i < len(cell_texts):
+                mapped[field_name] = cell_texts[i]
+
+        results.append(LicenseResult(**mapped))
 
     return results
 

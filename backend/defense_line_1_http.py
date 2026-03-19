@@ -49,13 +49,27 @@ async def search_license(
         resp = await client.get(cfg.search_page)
         resp.raise_for_status()
 
-        # Step 2: Build the POST payload (matches the JS LicenceSimpleSearch() AJAX call)
+        # Step 2: Build the POST payload using state-specific field mappings
+        field_map = cfg.http_payload_fields
+        if not field_map:
+            return VerificationResponse(
+                license_number=license_number,
+                state=state,
+                verified=False,
+                defense_line_used=DefenseLine.HTTP_DIRECT,
+                error=f"No HTTP payload field mappings configured for state: {state}",
+            )
+
+        input_values = {
+            "license_number": license_number,
+            "trade_name": trade_name or "",
+            "address": address or "",
+            "city": city or "",
+        }
         payload = {
-            "LicNumber": license_number,
-            "DBAName": trade_name or "",
-            "Address": address or "",
-            "City": city or "",
-            "State": "",
+            field_map[k]: v
+            for k, v in input_values.items()
+            if k in field_map
         }
 
         # Step 3: POST to the data endpoint
@@ -94,18 +108,17 @@ async def search_license(
         # The license search endpoint returns a JSON array directly
         records = data if isinstance(data, list) else data.get("Data", [])
 
+        # Map response fields using state-specific config
+        resp_map = cfg.http_response_fields
         results = []
         for rec in records:
-            results.append(
-                LicenseResult(
-                    license_number=str(rec.get("StringLicLocId", rec.get("LicenseId", ""))),
-                    trade_name=rec.get("LicDBA"),
-                    location_address=rec.get("LicAddressLine1"),
-                    city=rec.get("City"),
-                    state=rec.get("State"),
-                    expiration_date=rec.get("LicExpirationDate"),
-                )
-            )
+            mapped = {}
+            for resp_key, our_key in resp_map.items():
+                mapped[our_key] = rec.get(resp_key)
+            # Ensure license_number is a string
+            if "license_number" in mapped and mapped["license_number"] is not None:
+                mapped["license_number"] = str(mapped["license_number"])
+            results.append(LicenseResult(**mapped))
 
         return VerificationResponse(
             license_number=license_number,

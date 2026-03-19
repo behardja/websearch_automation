@@ -1,6 +1,6 @@
 """Configuration constants for license verification across states."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -13,6 +13,21 @@ class StateConfig:
     business_type_value: str
     field_ids: dict[str, str]
     result_columns: list[str]
+
+    # -- Method 1 (HTTP Direct) mappings --
+    # Maps our standard field names to the state's POST parameter names
+    http_payload_fields: dict[str, str] = field(default_factory=dict)
+    # Maps the state's JSON response field names to our LicenseResult fields
+    http_response_fields: dict[str, str] = field(default_factory=dict)
+
+    # -- Method 2 (Playwright) behavior --
+    # Does the form have a business-type dropdown that must be selected first?
+    has_business_type_dropdown: bool = True
+    # CSS selector for result rows (default: Kendo grid rows)
+    result_row_selector: str = "tbody tr.k-master-row"
+    # Ordered list of visible column names mapping to LicenseResult fields
+    # (after skipping hidden columns)
+    grid_column_map: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +55,26 @@ TEXAS = StateConfig(
         "StringLicLocId", "LicDBA", "LicAddressLine1",
         "City", "State", "LicExpirationDate",
     ],
+    http_payload_fields={
+        "license_number": "LicNumber",
+        "trade_name": "DBAName",
+        "address": "Address",
+        "city": "City",
+    },
+    http_response_fields={
+        "StringLicLocId": "license_number",
+        "LicDBA": "trade_name",
+        "LicAddressLine1": "location_address",
+        "City": "city",
+        "State": "state",
+        "LicExpirationDate": "expiration_date",
+    },
+    has_business_type_dropdown=True,
+    result_row_selector="tbody tr.k-master-row",
+    grid_column_map=[
+        "license_number", "trade_name", "location_address",
+        "city", "state", "expiration_date",
+    ],
 )
 
 # ---------------------------------------------------------------------------
@@ -55,6 +90,11 @@ FLORIDA = StateConfig(
     business_type_value="",
     field_ids={},         # TODO: map the form fields
     result_columns=[],
+    http_payload_fields={},
+    http_response_fields={},
+    has_business_type_dropdown=False,  # Florida's form works differently
+    result_row_selector="",           # TODO: discover the grid structure
+    grid_column_map=[],
 )
 
 # ---------------------------------------------------------------------------
