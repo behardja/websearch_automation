@@ -611,6 +611,7 @@ const SingleFilePanel: React.FC = () => {
               <option value="">Sequence all methods (default)</option>
               <option value="1">Method 1 — HTTP Direct</option>
               <option value="2">Method 2 — Playwright</option>
+              <option value="3">Method 3 — Gemini Computer Use</option>
             </select>
           </div>
 
@@ -665,7 +666,7 @@ const SingleFilePanel: React.FC = () => {
                   <strong>How it works:</strong> Clicking "Run Verification" will cascade
                   through verification methods. Method 1 sends direct HTTP requests.
                   Method 2 uses browser automation via Playwright.
-                  Method 3 (WIP) will use a Gemini AI agent to visually browse the state website.
+                  Method 3 uses a Gemini AI agent to visually browse the state website.
                   The cascade stops at the first successful verification.
                 </div>
               </div>
@@ -734,50 +735,35 @@ const SingleFilePanel: React.FC = () => {
                 <div key={step.line}>
                   {/* Step card */}
                   <div
-                    className={`relative border rounded-xl p-5 transition-all duration-300 ${
-                      step.line === 3
-                        ? "bg-[#1a1d23] border-[#2a2d35] opacity-40 border-dashed"
-                        : `${cfg.bg} ${cfg.border} ${step.status === "running" ? "shadow-md shadow-blue-500/10" : ""}`
-                    }`}
+                    className={`relative border rounded-xl p-5 transition-all duration-300 ${cfg.bg} ${cfg.border} ${step.status === "running" ? "shadow-md shadow-blue-500/10" : ""}`}
                   >
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-3">
                         <div
-                          className={`flex items-center justify-center w-10 h-10 rounded-lg ${
-                            step.line === 3
-                              ? "bg-[#22252b] border border-[#2a2d35]"
-                              : "bg-[#2a2d35] border border-[#3a3d45]"
-                          }`}
+                          className="flex items-center justify-center w-10 h-10 rounded-lg bg-[#2a2d35] border border-[#3a3d45]"
                         >
-                          <span className={`material-symbols-outlined text-[22px] ${step.line === 3 ? "text-slate-600" : cfg.color}`}>
+                          <span className={`material-symbols-outlined text-[22px] ${cfg.color}`}>
                             {step.icon}
                           </span>
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className={`text-xs font-bold uppercase tracking-wide ${step.line === 3 ? "text-slate-600" : cfg.color}`}>
+                            <span className={`text-xs font-bold uppercase tracking-wide ${cfg.color}`}>
                               {`Method ${step.line}`}
                             </span>
-                            {step.line === 3 && (
-                              <span className="text-[10px] bg-[#2a2d35] text-slate-500 px-1.5 py-0.5 rounded font-bold border border-[#3a3d45]">
-                                WIP
-                              </span>
-                            )}
                           </div>
-                          <h4 className={`text-sm font-bold ${step.line === 3 ? "text-slate-600" : "text-slate-200"}`}>{step.label}</h4>
+                          <h4 className="text-sm font-bold text-slate-200">{step.label}</h4>
                         </div>
                       </div>
-                      {step.line !== 3 && (
-                        <span
-                          className={`material-symbols-outlined text-[24px] ${cfg.color} ${
-                            step.status === "running" ? "animate-spin" : ""
-                          }`}
-                        >
-                          {cfg.icon}
-                        </span>
-                      )}
+                      <span
+                        className={`material-symbols-outlined text-[24px] ${cfg.color} ${
+                          step.status === "running" ? "animate-spin" : ""
+                        }`}
+                      >
+                        {cfg.icon}
+                      </span>
                     </div>
-                    <p className={`text-xs ml-[52px] ${step.line === 3 ? "text-slate-700" : "text-slate-500"}`}>{step.description}</p>
+                    <p className="text-xs ml-[52px] text-slate-500">{step.description}</p>
 
                     {step.error && (
                       <div className="mt-3 ml-[52px] text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">

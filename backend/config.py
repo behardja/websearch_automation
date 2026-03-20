@@ -162,3 +162,6 @@ REQUEST_TIMEOUT_SECONDS = 30
 # Gemini Computer Use model for 3rd line
 COMPUTER_USE_MODEL = "gemini-2.5-computer-use-preview-10-2025"
 COMPUTER_USE_SCREEN_SIZE = (1280, 936)
+
+# Fast model for parser sub-agent (converts narrative agent output to JSON)
+PARSER_MODEL = "gemini-3-flash-preview"

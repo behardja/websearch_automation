@@ -234,7 +234,7 @@ async def _run_cascade(
     all_lines = [
         (DefenseLine.HTTP_DIRECT, "HTTP Direct Request"),
         (DefenseLine.PLAYWRIGHT_SCRAPER, "Playwright Scraper"),
-        # Method 3 (Gemini Agent) disabled for now
+        (DefenseLine.GEMINI_AGENT, "Gemini Computer Use Agent"),
     ]
 
     # If a specific method is requested, only run that one
