@@ -36,6 +36,12 @@ from .playwright_computer import PlaywrightComputer
 
 logger = logging.getLogger(__name__)
 
+# Safety limits to prevent runaway token usage.
+# Typical runs take 6-12 steps; GA (most complex) can take ~10.
+# 25 gives ~2x headroom for retries + safety decision overhead.
+MAX_AGENT_STEPS = 25          # Maximum number of tool-call rounds before forcing stop
+AGENT_TIMEOUT_SECONDS = 180   # Hard timeout for the entire agent run
+
 # ---------------------------------------------------------------------------
 # Patch ComputerUseTool to handle the model's safety_decision protocol.
 # The Computer Use model may include a 'safety_decision' dict in function call
@@ -406,14 +412,33 @@ async def search_license(
     )
 
     final_text = ""
+    step_count = 0
     try:
-        async for event in runner.run_async(
-            user_id="user",
-            session_id=session.id,
-            new_message=content,
-        ):
-            if event.is_final_response() and event.content and event.content.parts:
-                final_text = event.content.parts[0].text
+        async def _run_agent():
+            nonlocal final_text, step_count
+            async for event in runner.run_async(
+                user_id="user",
+                session_id=session.id,
+                new_message=content,
+            ):
+                # Count tool-call events (each is a screenshot + model round-trip)
+                if not event.is_final_response():
+                    step_count += 1
+                    if step_count >= MAX_AGENT_STEPS:
+                        logger.warning(
+                            "Agent hit max step limit (%d). Forcing stop.",
+                            MAX_AGENT_STEPS,
+                        )
+                        break
+                if event.is_final_response() and event.content and event.content.parts:
+                    final_text = event.content.parts[0].text
+
+        await asyncio.wait_for(_run_agent(), timeout=AGENT_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Agent hit timeout (%ds) after %d steps. Forcing stop.",
+            AGENT_TIMEOUT_SECONDS, step_count,
+        )
     except Exception as e:
         logger.exception("Gemini Computer Use agent failed")
         return VerificationResponse(
@@ -425,12 +450,15 @@ async def search_license(
         )
 
     if not final_text:
+        reason = "Agent returned no response"
+        if step_count >= MAX_AGENT_STEPS:
+            reason = f"Agent stopped after hitting max step limit ({MAX_AGENT_STEPS} steps) with no final response"
         return VerificationResponse(
             license_number=license_number,
             state=state,
             verified=False,
             defense_line_used=DefenseLine.GEMINI_AGENT,
-            error="Agent returned no response",
+            error=reason,
         )
 
     logger.info("Agent raw response: %s", final_text[:2000])

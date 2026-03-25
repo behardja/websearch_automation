@@ -415,9 +415,10 @@ const SingleFilePanel: React.FC = () => {
           {/* Confidence legend */}
           <div className="mb-4 p-3 bg-[#1a1d23] border border-[#2a2d35] rounded-lg">
             <div className="flex items-center gap-4 text-xs text-slate-400">
-              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-400"></span> High (&ge;0.8)</span>
-              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400"></span> Medium (0.5–0.8)</span>
-              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400"></span> Low (&lt;0.5)</span>
+              <span className="text-slate-500 font-medium">AI Confidence:</span>
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-400"></span> High</span>
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400"></span> Medium</span>
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400"></span> Low</span>
             </div>
           </div>
 
@@ -431,6 +432,50 @@ const SingleFilePanel: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Quick search by license # only */}
+          <button
+            onClick={() => {
+              // Start verification with only license_number and state (no extra fields)
+              setCurrentView("verify");
+              setProcessing(true);
+              setFinalResult(null);
+              setSteps(INITIAL_STEPS.map((s) => ({ ...s, status: "idle", error: undefined, result: undefined })));
+
+              startVerification(fields.license_number.value.trim(), fields.state.value, undefined, selectedMethod)
+                .then(() => {
+                  const ctrl = subscribeVerifyStatus(
+                    (event: CascadeEvent) => {
+                      if (event.defense_line) {
+                        setSteps((prev) =>
+                          prev.map((step) => {
+                            if (step.line === event.defense_line) {
+                              return { ...step, status: event.status as DefenseStep["status"], error: event.error, result: event.result };
+                            }
+                            if (event.status === "success" && step.line > event.defense_line!) {
+                              return { ...step, status: "skipped" };
+                            }
+                            return step;
+                          })
+                        );
+                      }
+                      if (event.status === "complete") {
+                        setFinalResult(event.result || null);
+                        setProcessing(false);
+                      }
+                    },
+                    () => setProcessing(false)
+                  );
+                  abortRef.current = ctrl;
+                })
+                .catch(() => setProcessing(false));
+            }}
+            disabled={!fields.license_number.value.trim()}
+            className="w-full mb-4 py-2.5 bg-success text-white font-bold text-sm rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+          >
+            <span className="material-symbols-outlined text-[18px]">play_arrow</span>
+            Quick Search by License / Permit Number
+          </button>
 
           <div className="space-y-4">
             {/* License Number */}
@@ -621,7 +666,7 @@ const SingleFilePanel: React.FC = () => {
             className="w-full mt-4 py-3 bg-success text-white font-bold text-sm rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
           >
             <span className="material-symbols-outlined text-[18px]">play_arrow</span>
-            Run Verification
+            Run Verification on All Fields
           </button>
         </div>
 
