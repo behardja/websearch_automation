@@ -112,5 +112,4 @@ python -m backend.defense_line_3_agent --license 200034858
 ```
 
 ## Containerization
-
-See [GKE_CONTAINERIZATION_PLAN.md](GKE_CONTAINERIZATION_PLAN.md) for deploying as a single container on GKE.
+TBD
