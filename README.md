@@ -1,166 +1,116 @@
-# TABC License Verification — Web Search Automation
+# Alcohol License Verification — Web Search Automation
 
-Automated verification of Texas alcohol licenses against the [TABC Public Search](https://tabcaims.elicense365.com/Apps/LicenceSimpleSearch/#) website, implementing a **3 Lines of Defense** strategy.
+Automated verification of alcohol licenses against state government websites, implementing a **3 Lines of Defense** strategy. Supports Texas (TABC), Florida (DBPR), and Georgia (DOR).
 
 ## Architecture
 
-This project implements Part 2 of the License Solution Architecture. It receives extracted license data (from Document AI in Part 1) and verifies it against the TABC government website.
+Upload a license document → Document AI extracts fields → Human reviews (HITL) → Cascade verification against state website.
 
 ![Solution Architecture](imgs/flow.png)
 
 ### Defense Lines
 
-| Line | Method | Tech | When to Use |
+| Line | Method | Tech | Description |
 |------|--------|------|-------------|
-| **1st** | HTTP Header Requests | `requests` / `httpx` | Default — fastest, lowest overhead. Directly POST to the TABC search endpoint (`/Apps/RequesforaValidation`) with form data. |
-| **2nd** | Web Scraping / Browser Automation | `playwright` | Fallback if 1st line is blocked (captcha, session tokens, JS-rendered content). Fills fields and parses the DOM. |
-| **3rd** | AI Agent (Computer Use) | `google-adk` + `gemini-2.5-computer-use` | Last resort / exploratory. Gemini visually browses the TABC site like a human, typing into fields and reading results from screenshots. |
+| **1st** | HTTP Direct | `httpx` | POST to the state search endpoint. Fastest, lowest overhead. |
+| **2nd** | Browser Automation | `playwright` | Fill form fields and parse DOM. Fallback when HTTP is blocked. |
+| **3rd** | AI Agent (Computer Use) | `google-adk` + `gemini-2.5-computer-use` | Gemini visually browses the site like a human. Most resilient but slowest. |
+
+Safety limits on Method 3: max 25 steps and 180s timeout to prevent runaway token usage.
+
+## App Modes
+
+### Single File Mode
+- Upload a license PDF/image, select state
+- Document AI extracts fields with confidence scores (high/medium/low)
+- Quick search by license number only, or full verification on all extracted fields
+- Visual cascade showing each defense line: idle → running → success/failed
+- Structured JSON output with copy-to-clipboard
+
+### Batch Mode
+- Browse files from a GCS path, select state and verification method
+- Concurrent Document AI extraction + web verification pipeline
+- Configurable cascade: Method 1 & 2 (default), all methods, or individual methods
+- Results displayed in 3 columns: low-confidence extractions (yellow), failed (red), verified (green)
+- Compiled JSON output
 
 ## Project Structure
 
 ```
 websearch_automation/
-├── README.md
-├── requirements.txt
-├── server.py                      # FastAPI entry point (uvicorn server:app)
-├── .env                           # GCP project config (same as product-fidelity-eval)
+├── server.py                      # FastAPI entry point
+├── .env                           # GCP project config
 ├── backend/
-│   ├── main.py                    # (legacy — use server.py at root instead)
-│   ├── config.py                  # Configuration & constants
-│   ├── models.py                  # Pydantic models
-│   ├── defense_line_1_http.py     # Direct HTTP requests to TABC
+│   ├── config.py                  # State configs, constants
+│   ├── models.py                  # Pydantic models (LicenseResult, VerificationResponse)
+│   ├── document_ai.py             # Document AI extraction
+│   ├── defense_line_1_http.py     # HTTP direct
 │   ├── defense_line_2_scraper.py  # Playwright browser automation
 │   ├── defense_line_3_agent.py    # Gemini Computer Use agent (ADK)
 │   └── playwright_computer.py     # Browser interface for ADK ComputerUseToolset
-├── app/
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tsconfig.json
-│   ├── tailwind.config.ts
-│   ├── postcss.config.cjs
+├── app/                           # React + TypeScript frontend
 │   └── src/
-│       ├── main.tsx
-│       ├── index.css
-│       ├── App.tsx
 │       ├── components/
-│       │   ├── Header.tsx          # Mode toggle (Single File / Batch)
-│       │   ├── SingleFilePanel.tsx  # Upload + visual defense cascade flow
-│       │   ├── BatchList.tsx       # Checkbox list for batch selection
-│       │   └── ResultsPanel.tsx    # Verification results display
+│       │   ├── Header.tsx         # Mode toggle (Single File / Batch)
+│       │   ├── SingleFilePanel.tsx # Upload + defense cascade
+│       │   └── BatchList.tsx      # GCS file browser + batch processing
 │       └── services/
-│           └── apiClient.ts        # API calls to FastAPI backend
+│           └── apiClient.ts       # API client (SSE streaming)
 └── imgs/
 ```
 
-## App Modes
-
-### Single File Mode
-- Upload a license PDF/image and select the state (TX, FL)
-- Visual progress flow showing the 3 Lines of Defense cascade (Lines 1 & 2 are scripts, Line 3 is the Gemini browser agent)
-- Each step shows live status: idle → running → success/failed/skipped
-- Final structured JSON output with copy-to-clipboard
-- No chat — just upload, process, results
-
-### Batch Mode
-- Paste a list of license numbers (one per line or comma-separated)
-- Checkbox list to select which licenses to verify
-- Select All / Deselect All / Remove controls
-- Real-time SSE progress streaming per license
-- Cancel button for in-progress batches
-
 ## Setup
-
-Uses the same GCP project and service account as [product-fidelity-eval](https://github.com/behardja/product-fidelity-eval/tree/expand_video_feature).
 
 ### Prerequisites
 
 - Python 3.10+
 - Node.js v18+
-- Google Cloud authentication (e.g. `gcloud auth application-default login`)
+- Google Cloud authentication (`gcloud auth application-default login`)
 - Vertex AI API enabled
-- Same service account / permissions as product-fidelity-eval
 
-### IAM Permissions
+### IAM Roles
 
-The service account running the app needs these roles on the project containing the Document AI processor:
-
-- `roles/documentai.apiUser` — required for Document AI extraction
-
-```bash
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:SA_EMAIL" \
-  --role="roles/documentai.apiUser" \
-  --condition=None
-```
+The service account needs:
+- `roles/documentai.apiUser` — Document AI extraction
+- `roles/aiplatform.user` — Vertex AI / Gemini
+- `roles/storage.objectViewer` — GCS file access
 
 ### Environment
-
-Copy the `.env` file and fill in your project ID:
-
-```bash
-cd websearch_automation
-cp .env.example .env
-# Edit .env with your project ID
-```
-
-Or export directly:
 
 ```bash
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_GENAI_USE_VERTEXAI=1
 ```
 
-### Install Dependencies
+Or use a `.env` file in the project root.
+
+### Install & Run
 
 ```bash
-# Python
+# Python dependencies
 pip install -r requirements.txt
 playwright install chromium
-playwright install-deps chromium
 
 # Frontend
-cd app
-npm install
-```
+cd app && npm install
 
-### Running the App
-
-**1. Start the backend server (terminal 1):**
-
-```bash
+# Start backend (terminal 1)
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+
+# Start frontend (terminal 2)
+cd app && npm run dev
 ```
 
-**2. Start the frontend dev server (terminal 2):**
+App runs at [http://localhost:3000](http://localhost:3000).
+
+### CLI Testing
 
 ```bash
-cd app
-npm run dev   # alt: npx vite --host 0.0.0.0
-```
-
-The app opens at [http://localhost:3000](http://localhost:3000).
-
-## Quick Test (CLI)
-
-```bash
-# 1st Line — direct HTTP
 python -m backend.defense_line_1_http --license 200034858
-
-# 2nd Line — Playwright scraper
 python -m backend.defense_line_2_scraper --license 200034858
-
-# 3rd Line — Gemini Computer Use agent
 python -m backend.defense_line_3_agent --license 200034858
 ```
 
-## 3rd Line: ADK Computer Use Agent
+## Containerization
 
-The 3rd line of defense uses Google's [ADK Computer Use sample](https://github.com/google/adk-python/tree/main/contributing/samples/computer_use) as a foundation. It leverages:
-
-- **Model**: `gemini-2.5-computer-use-preview-10-2025`
-- **Tools**: `ComputerUseToolset` from `google.adk`
-- **Browser**: Playwright-controlled Chromium
-- **Approach**: The agent sees screenshots of the TABC website, types the license number into the search field, clicks search, and reads the results visually — exactly like a human would.
-
-This is the most resilient approach (works even if the site structure changes) but also the slowest and most expensive. Use only when Lines 1 and 2 fail.
+See [GKE_CONTAINERIZATION_PLAN.md](GKE_CONTAINERIZATION_PLAN.md) for deploying as a single container on GKE.
