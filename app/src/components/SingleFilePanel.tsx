@@ -4,7 +4,6 @@ import {
   subscribeVerifyStatus,
   extractDocument,
   type CascadeEvent,
-  type FieldWithConfidence,
 } from "../services/apiClient";
 
 // ---------------------------------------------------------------------------

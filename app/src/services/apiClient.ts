@@ -139,11 +139,13 @@ export interface BatchEvent {
   defense_line_used?: number;
   result_count?: number;
   error?: string;
+  result?: any;
 }
 
 export async function startBatch(
   licenses: BatchLicense[],
-  defenseLine: number | null
+  defenseLine: number | null,
+  cascadeLines?: number[] | null
 ): Promise<{ batch_id: string; license_count: number }> {
   const resp = await fetch(`${API_BASE}/batch/start`, {
     method: "POST",
@@ -151,6 +153,7 @@ export async function startBatch(
     body: JSON.stringify({
       licenses,
       defense_line: defenseLine,
+      cascade_lines: cascadeLines || null,
     }),
   });
 

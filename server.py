@@ -35,7 +35,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from backend.config import STATE_CONFIGS, SUPPORTED_STATES
+from backend.config import STATE_CONFIGS, SUPPORTED_STATES, BATCH_CONCURRENCY
 from backend.models import (
     LicenseSearchRequest,
     VerificationResponse,
@@ -428,6 +428,7 @@ from pydantic import BaseModel
 class BatchStartRequest(BaseModel):
     licenses: list[LicenseSearchRequest]
     defense_line: int | None = None
+    cascade_lines: list[int] | None = None  # e.g. [1,2] or [1,2,3]
 
 
 _batch_state: dict | None = None
@@ -436,40 +437,45 @@ _batch_state: dict | None = None
 async def _run_batch(
     licenses: list[LicenseSearchRequest],
     defense_line: DefenseLine | None,
+    cascade_lines: list[DefenseLine] | None,
     queue: asyncio.Queue,
 ):
-    """Process licenses sequentially and push status events to the queue."""
-    for req in licenses:
-        await queue.put({
-            "license_number": req.license_number,
-            "status": "running",
-        })
+    """Process licenses concurrently (up to BATCH_CONCURRENCY) and push status events."""
+    sem = asyncio.Semaphore(BATCH_CONCURRENCY)
 
-        try:
-            # If a specific line is requested, use it; otherwise cascade
-            if defense_line:
-                result = await _run_line(req.license_number, req.state or "TX", defense_line)
-            else:
-                # Simple cascade for batch: try each line
-                for ln in [DefenseLine.HTTP_DIRECT, DefenseLine.PLAYWRIGHT_SCRAPER]:
-                    result = await _run_line(req.license_number, req.state or "TX", ln)
-                    if result.verified or result.error is None:
-                        break
-
+    async def _process_one(req: LicenseSearchRequest):
+        async with sem:
             await queue.put({
                 "license_number": req.license_number,
-                "status": "verified" if result.verified else "not_found",
-                "defense_line_used": result.defense_line_used,
-                "result_count": len(result.results),
-                "error": result.error,
-            })
-        except Exception as e:
-            await queue.put({
-                "license_number": req.license_number,
-                "status": "error",
-                "error": str(e),
+                "status": "running",
             })
 
+            try:
+                if defense_line:
+                    result = await _run_line(req.license_number, req.state or "TX", defense_line)
+                else:
+                    lines = cascade_lines or [DefenseLine.HTTP_DIRECT, DefenseLine.PLAYWRIGHT_SCRAPER]
+                    for ln in lines:
+                        result = await _run_line(req.license_number, req.state or "TX", ln)
+                        if result.verified or result.error is None:
+                            break
+
+                await queue.put({
+                    "license_number": req.license_number,
+                    "status": "verified" if result.verified else "not_found",
+                    "defense_line_used": result.defense_line_used,
+                    "result_count": len(result.results),
+                    "error": result.error,
+                    "result": result.model_dump(),
+                })
+            except Exception as e:
+                await queue.put({
+                    "license_number": req.license_number,
+                    "status": "error",
+                    "error": str(e),
+                })
+
+    await asyncio.gather(*[_process_one(req) for req in licenses])
     await queue.put({"status": "complete"})
 
 
@@ -482,9 +488,10 @@ async def batch_start(body: BatchStartRequest):
 
     queue: asyncio.Queue = asyncio.Queue()
     defense = DefenseLine(body.defense_line) if body.defense_line else None
+    cascade = [DefenseLine(v) for v in body.cascade_lines] if body.cascade_lines else None
 
     task = asyncio.create_task(
-        _run_batch(body.licenses, defense, queue)
+        _run_batch(body.licenses, defense, cascade, queue)
     )
 
     _batch_state = {
