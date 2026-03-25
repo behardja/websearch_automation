@@ -55,10 +55,12 @@ class PlaywrightComputer(BaseComputer):
         screen_size: tuple[int, int],
         initial_url: str = "https://www.google.com",
         user_data_dir: Optional[str] = None,
+        headless: bool = True,
     ):
         self._initial_url = initial_url
         self._screen_size = screen_size
         self._user_data_dir = user_data_dir
+        self._headless = headless
 
     @override
     async def initialize(self):
@@ -71,14 +73,14 @@ class PlaywrightComputer(BaseComputer):
         if self._user_data_dir:
             self._context = await self._playwright.chromium.launch_persistent_context(
                 self._user_data_dir,
-                headless=False,
+                headless=self._headless,
                 args=browser_args,
             )
             self._browser = self._context.browser
         else:
             self._browser = await self._playwright.chromium.launch(
                 args=browser_args,
-                headless=False,
+                headless=self._headless,
             )
             self._context = await self._browser.new_context()
 
@@ -99,7 +101,7 @@ class PlaywrightComputer(BaseComputer):
         return ComputerEnvironment.ENVIRONMENT_BROWSER
 
     @override
-    async def close(self, exc_type, exc_val, exc_tb):
+    async def close(self):
         if self._context:
             await self._context.close()
         try:
@@ -108,6 +110,14 @@ class PlaywrightComputer(BaseComputer):
         except Exception:
             pass
         await self._playwright.stop()
+
+    @override
+    async def open_web_browser(self) -> ComputerState:
+        return await self.current_state()
+
+    @override
+    async def search(self) -> ComputerState:
+        return await self.current_state()
 
     async def click_at(self, x: int, y: int):
         await self._page.mouse.click(x, y)

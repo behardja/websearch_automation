@@ -1,6 +1,45 @@
 const API_BASE = "/api";
 
 // ---------------------------------------------------------------------------
+// Document AI Extraction
+// ---------------------------------------------------------------------------
+
+export interface FieldWithConfidence {
+  value: string;
+  raw_value?: string;
+  confidence: number;
+}
+
+export interface ExtractionResponse {
+  filename: string;
+  state: string;
+  size_bytes: number;
+  fields: Record<string, FieldWithConfidence> | null;
+  error?: string;
+}
+
+export async function extractDocument(
+  file: File,
+  state: string
+): Promise<ExtractionResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("state", state);
+
+  const resp = await fetch(`${API_BASE}/verify/upload`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Extraction failed ${resp.status}: ${text}`);
+  }
+
+  return resp.json();
+}
+
+// ---------------------------------------------------------------------------
 // Single File Mode: start cascade + SSE progress streaming
 // ---------------------------------------------------------------------------
 
@@ -15,7 +54,7 @@ export interface CascadeEvent {
 export interface ExtractedFields {
   permit_type: string;
   license_number: string;
-  trade_name: string;
+  doing_business_as: string;
   address: string;
   city: string;
   state: string;
@@ -32,7 +71,7 @@ export async function startVerification(
   formData.append("state", state);
   if (fields) {
     formData.append("permit_type", fields.permit_type);
-    formData.append("trade_name", fields.trade_name);
+    formData.append("trade_name", fields.doing_business_as);
     formData.append("address", fields.address);
     formData.append("city", fields.city);
   }
@@ -100,11 +139,13 @@ export interface BatchEvent {
   defense_line_used?: number;
   result_count?: number;
   error?: string;
+  result?: any;
 }
 
 export async function startBatch(
   licenses: BatchLicense[],
-  defenseLine: number | null
+  defenseLine: number | null,
+  cascadeLines?: number[] | null
 ): Promise<{ batch_id: string; license_count: number }> {
   const resp = await fetch(`${API_BASE}/batch/start`, {
     method: "POST",
@@ -112,6 +153,7 @@ export async function startBatch(
     body: JSON.stringify({
       licenses,
       defense_line: defenseLine,
+      cascade_lines: cascadeLines || null,
     }),
   });
 

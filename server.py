@@ -35,7 +35,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from backend.config import STATE_CONFIGS, SUPPORTED_STATES
+from backend.config import STATE_CONFIGS, SUPPORTED_STATES, BATCH_CONCURRENCY
 from backend.models import (
     LicenseSearchRequest,
     VerificationResponse,
@@ -44,6 +44,7 @@ from backend.models import (
 from backend import defense_line_1_http as line1
 from backend import defense_line_2_scraper as line2
 from backend import defense_line_3_agent as line3
+from backend.document_ai import extract_fields, build_search_fields
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -233,7 +234,7 @@ async def _run_cascade(
     all_lines = [
         (DefenseLine.HTTP_DIRECT, "HTTP Direct Request"),
         (DefenseLine.PLAYWRIGHT_SCRAPER, "Playwright Scraper"),
-        # Method 3 (Gemini Agent) disabled for now
+        (DefenseLine.GEMINI_AGENT, "Gemini Computer Use Agent"),
     ]
 
     # If a specific method is requested, only run that one
@@ -296,26 +297,55 @@ async def verify_upload(
     state: str = Form(...),
 ):
     """
-    Single File Mode: upload a license PDF/image, extract license number
-    (placeholder — in production this calls Document AI), then kick off
-    the defense line cascade.
+    Single File Mode: upload a license PDF/image, send to Document AI
+    for field extraction, and return extracted fields with confidence scores.
 
-    Returns a job_id; the client subscribes to /api/verify/status for SSE.
+    The frontend displays these in the review form (HITL step) before
+    the user triggers the websearch cascade.
     """
-    global _single_state
+    file_bytes = await file.read()
+    filename = file.filename or "unknown"
 
-    # TODO: In production, send the file to Document AI to extract fields.
-    # For now, the user manually provides the license number via the form.
-    # We read the file but don't process it yet.
-    _file_bytes = await file.read()
-    _filename = file.filename
+    # Determine MIME type
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        mime_type = "application/pdf"
+    elif lower.endswith((".jpg", ".jpeg")):
+        mime_type = "image/jpeg"
+    elif lower.endswith(".png"):
+        mime_type = "image/png"
+    elif lower.endswith(".tiff"):
+        mime_type = "image/tiff"
+    elif lower.endswith(".webp"):
+        mime_type = "image/webp"
+    else:
+        mime_type = file.content_type or "application/octet-stream"
 
-    return {
-        "message": "File received. Use /api/verify/start to begin cascade.",
-        "filename": _filename,
-        "state": state,
-        "size_bytes": len(_file_bytes),
-    }
+    try:
+        extraction = extract_fields(file_bytes, mime_type)
+        search_fields = build_search_fields(extraction)
+
+        # Override state if jurisdiction was extracted with high confidence
+        if search_fields["state"]["value"]:
+            resolved_state = search_fields["state"]["value"]
+        else:
+            resolved_state = state
+
+        return {
+            "filename": filename,
+            "state": resolved_state,
+            "size_bytes": len(file_bytes),
+            "fields": search_fields,
+        }
+    except Exception as e:
+        logging.error(f"Document AI extraction failed: {e}")
+        return {
+            "filename": filename,
+            "state": state,
+            "size_bytes": len(file_bytes),
+            "fields": None,
+            "error": f"Extraction failed: {str(e)}",
+        }
 
 
 @app.post("/api/verify/start")
@@ -398,6 +428,7 @@ from pydantic import BaseModel
 class BatchStartRequest(BaseModel):
     licenses: list[LicenseSearchRequest]
     defense_line: int | None = None
+    cascade_lines: list[int] | None = None  # e.g. [1,2] or [1,2,3]
 
 
 _batch_state: dict | None = None
@@ -406,40 +437,45 @@ _batch_state: dict | None = None
 async def _run_batch(
     licenses: list[LicenseSearchRequest],
     defense_line: DefenseLine | None,
+    cascade_lines: list[DefenseLine] | None,
     queue: asyncio.Queue,
 ):
-    """Process licenses sequentially and push status events to the queue."""
-    for req in licenses:
-        await queue.put({
-            "license_number": req.license_number,
-            "status": "running",
-        })
+    """Process licenses concurrently (up to BATCH_CONCURRENCY) and push status events."""
+    sem = asyncio.Semaphore(BATCH_CONCURRENCY)
 
-        try:
-            # If a specific line is requested, use it; otherwise cascade
-            if defense_line:
-                result = await _run_line(req.license_number, req.state or "TX", defense_line)
-            else:
-                # Simple cascade for batch: try each line
-                for ln in [DefenseLine.HTTP_DIRECT, DefenseLine.PLAYWRIGHT_SCRAPER]:
-                    result = await _run_line(req.license_number, req.state or "TX", ln)
-                    if result.verified or result.error is None:
-                        break
-
+    async def _process_one(req: LicenseSearchRequest):
+        async with sem:
             await queue.put({
                 "license_number": req.license_number,
-                "status": "verified" if result.verified else "not_found",
-                "defense_line_used": result.defense_line_used,
-                "result_count": len(result.results),
-                "error": result.error,
-            })
-        except Exception as e:
-            await queue.put({
-                "license_number": req.license_number,
-                "status": "error",
-                "error": str(e),
+                "status": "running",
             })
 
+            try:
+                if defense_line:
+                    result = await _run_line(req.license_number, req.state or "TX", defense_line)
+                else:
+                    lines = cascade_lines or [DefenseLine.HTTP_DIRECT, DefenseLine.PLAYWRIGHT_SCRAPER]
+                    for ln in lines:
+                        result = await _run_line(req.license_number, req.state or "TX", ln)
+                        if result.verified or result.error is None:
+                            break
+
+                await queue.put({
+                    "license_number": req.license_number,
+                    "status": "verified" if result.verified else "not_found",
+                    "defense_line_used": result.defense_line_used,
+                    "result_count": len(result.results),
+                    "error": result.error,
+                    "result": result.model_dump(),
+                })
+            except Exception as e:
+                await queue.put({
+                    "license_number": req.license_number,
+                    "status": "error",
+                    "error": str(e),
+                })
+
+    await asyncio.gather(*[_process_one(req) for req in licenses])
     await queue.put({"status": "complete"})
 
 
@@ -452,9 +488,10 @@ async def batch_start(body: BatchStartRequest):
 
     queue: asyncio.Queue = asyncio.Queue()
     defense = DefenseLine(body.defense_line) if body.defense_line else None
+    cascade = [DefenseLine(v) for v in body.cascade_lines] if body.cascade_lines else None
 
     task = asyncio.create_task(
-        _run_batch(body.licenses, defense, queue)
+        _run_batch(body.licenses, defense, cascade, queue)
     )
 
     _batch_state = {

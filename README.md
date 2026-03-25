@@ -81,6 +81,19 @@ Uses the same GCP project and service account as [product-fidelity-eval](https:/
 - Vertex AI API enabled
 - Same service account / permissions as product-fidelity-eval
 
+### IAM Permissions
+
+The service account running the app needs these roles on the project containing the Document AI processor:
+
+- `roles/documentai.apiUser` — required for Document AI extraction
+
+```bash
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:SA_EMAIL" \
+  --role="roles/documentai.apiUser" \
+  --condition=None
+```
+
 ### Environment
 
 Copy the `.env` file and fill in your project ID:
