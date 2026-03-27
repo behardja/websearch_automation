@@ -739,20 +739,31 @@ const SingleFilePanel: React.FC = () => {
           <h3 className="text-base font-bold text-slate-100">Verification</h3>
         </div>
 
-        {/* Compact field summary */}
+        {/* Document AI Extracted Fields */}
         <div className="bg-[#1a1d23] border border-[#2a2d35] rounded-xl p-4 space-y-2 text-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="material-symbols-outlined text-[16px] text-primary">description</span>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">Document AI Extraction</span>
+          </div>
           {[
             { label: "Type", value: BUSINESS_TYPE },
             { label: "License #", value: fields.license_number.value },
             { label: "Doing Business As", value: fields.doing_business_as.value },
+            { label: "Legal Name", value: fields.legal_name.value },
+            { label: "License Type", value: fields.license_type.value },
+            { label: "Expiration", value: fields.expiration_date.value },
             { label: "Address", value: fields.address.value },
-            { label: "City, State", value: `${fields.city.value}, ${fields.state.value}` },
-          ].map((row) => (
-            <div key={row.label} className="flex gap-2">
-              <span className="text-slate-500 w-24 flex-shrink-0 text-xs">{row.label}</span>
-              <span className="text-slate-300 font-medium text-xs">{row.value}</span>
-            </div>
-          ))}
+            { label: "City", value: fields.city.value },
+            { label: "State", value: fields.state.value },
+            { label: "Jurisdiction", value: fields.jurisdiction.value },
+          ]
+            .filter((row) => row.value)
+            .map((row) => (
+              <div key={row.label} className="flex gap-2">
+                <span className="text-slate-500 w-28 flex-shrink-0 text-xs">{row.label}</span>
+                <span className="text-slate-300 font-medium text-xs">{row.value}</span>
+              </div>
+            ))}
         </div>
 
         {/* New search button */}
