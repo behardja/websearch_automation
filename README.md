@@ -98,7 +98,7 @@ cd app && npm install
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
 # Start frontend (terminal 2)
-cd app && npm run dev
+cd app && npm run dev # alt. npx vite --host 0.0.0.0
 ```
 
 App runs at [http://localhost:3000](http://localhost:3000).

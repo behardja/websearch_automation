@@ -294,7 +294,7 @@ async def _run_cascade(
 @app.post("/api/verify/upload")
 async def verify_upload(
     file: UploadFile = File(...),
-    state: str = Form(...),
+    state: str = Form(""),
 ):
     """
     Single File Mode: upload a license PDF/image, send to Document AI

@@ -19,6 +19,7 @@ interface GcsFile {
   status: "pending" | "extracting" | "running" | "verified" | "not_found" | "error";
   license_number?: string;
   license_confidence?: number;
+  detected_state?: string;
   defense_line_used?: number;
   result_count?: number;
   error?: string;
@@ -92,7 +93,6 @@ const BatchList: React.FC = () => {
   const [files, setFiles] = useState<GcsFile[]>([]);
   const [filesLoaded, setFilesLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [selectedState, setSelectedState] = useState("TX");
   const [defenseMode, setDefenseMode] = useState("cascade12");
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
 
@@ -167,6 +167,7 @@ const BatchList: React.FC = () => {
         status: "pending" as const,
         error: undefined,
         result: undefined,
+        detected_state: undefined,
         defense_line_used: undefined,
         result_count: undefined,
       }))
@@ -202,7 +203,7 @@ const BatchList: React.FC = () => {
           const blob = await fetch(`/api/gcs/preview?path=${encodeURIComponent(file.path)}`).then((r) => r.blob());
           const formData = new FormData();
           formData.append("file", blob, file.name);
-          formData.append("state", selectedState);
+          formData.append("state", "");
 
           const extractResp = await fetch("/api/verify/upload", {
             method: "POST",
@@ -212,12 +213,12 @@ const BatchList: React.FC = () => {
 
           const licenseNum = extractData.fields?.license_number?.value || "";
           const licenseConf = extractData.fields?.license_number?.confidence ?? 0;
-          const resolvedState = extractData.state || selectedState;
+          const resolvedState = extractData.state || extractData.fields?.state?.value || "";
 
           setFiles((prev) =>
             prev.map((f, idx) =>
               idx === i
-                ? { ...f, license_number: licenseNum, license_confidence: licenseConf, status: licenseNum ? "pending" : "error", error: licenseNum ? undefined : "No license number extracted" }
+                ? { ...f, license_number: licenseNum, license_confidence: licenseConf, detected_state: resolvedState, status: licenseNum ? "pending" : "error", error: licenseNum ? undefined : "No license number extracted" }
                 : f
             )
           );
@@ -376,22 +377,6 @@ const BatchList: React.FC = () => {
             <p className="text-xs text-slate-600 mt-1.5">Enter a GCS folder path containing license PDFs/images</p>
           </div>
 
-          {/* State selector */}
-          {filesLoaded && (
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-300 mb-1">State</label>
-              <select
-                value={selectedState}
-                onChange={(e) => setSelectedState(e.target.value)}
-                className="w-full px-3 py-2 border border-[#3a3d45] rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                <option value="TX">Texas (TABC)</option>
-                <option value="FL">Florida (DBPR)</option>
-                <option value="GA">Georgia (DOR)</option>
-              </select>
-            </div>
-          )}
-
           {/* Method selector */}
           {filesLoaded && (
             <div className="mb-4">
@@ -416,7 +401,7 @@ const BatchList: React.FC = () => {
             <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg flex items-start gap-2">
               <span className="material-symbols-outlined text-[18px] text-blue-400 mt-0.5">info</span>
               <div className="text-xs text-blue-300">
-                Each file is sent to <strong>Document AI</strong> to extract the License / Permit Number, then verified against the state website.
+                Each file is sent to <strong>Document AI</strong> to extract the License / Permit Number and detect the state, then verified against the appropriate state website automatically.
               </div>
             </div>
           )}
@@ -543,7 +528,7 @@ const BatchList: React.FC = () => {
           </div>
           <div className="flex gap-2">
             <span className="text-slate-500 w-20 flex-shrink-0 text-xs">State</span>
-            <span className="text-slate-300 font-medium text-xs">{selectedState}</span>
+            <span className="text-slate-300 font-medium text-xs">Auto-detected per file</span>
           </div>
           <div className="flex gap-2">
             <span className="text-slate-500 w-20 flex-shrink-0 text-xs">Method</span>
@@ -701,6 +686,7 @@ const BatchList: React.FC = () => {
                       <p className="text-sm font-medium text-slate-200 truncate">{file.name}</p>
                       <div className="flex items-center gap-2 text-xs text-slate-600">
                         {file.license_number && <span className="text-slate-500 font-mono">{file.license_number}</span>}
+                        {file.detected_state && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400">{file.detected_state}</span>}
                         {file.license_confidence !== undefined && file.license_confidence > 0 && (
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${confidenceTag(file.license_confidence).bg} ${confidenceTag(file.license_confidence).color}`}>
                             {confidenceTag(file.license_confidence).label}
