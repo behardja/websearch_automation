@@ -98,7 +98,7 @@ cd app && npm install
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
 # Start frontend (terminal 2)
-cd app && npm run dev
+cd app && npm run dev # alt. npx vite --host 0.0.0.0
 ```
 
 App runs at [http://localhost:3000](http://localhost:3000).
@@ -111,5 +111,47 @@ python -m backend.defense_line_2_scraper --license 200034858
 python -m backend.defense_line_3_agent --license 200034858
 ```
 
-## Containerization
-TBD
+## Containerization preparation for Deployment
+
+Build and push to Registry using the following:
+
+### Dockerfile
+
+Create a `Dockerfile`:
+
+```dockerfile
+# Stage 1 — Build React frontend
+FROM node:20-slim AS frontend-build
+WORKDIR /build
+COPY app/package.json app/package-lock.json ./
+RUN npm ci
+COPY app/ ./
+RUN npm run build
+
+# Stage 2 — Runtime (Playwright base image includes Chromium)
+FROM mcr.microsoft.com/playwright/python:v1.52.0-noble
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ ./backend/
+COPY server.py ./
+
+COPY --from=frontend-build /build/dist ./app/dist/
+
+RUN playwright install chromium
+
+EXPOSE 8000
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Static File Serving
+
+In the container there is no Vite dev server, so FastAPI needs to serve the built React files itself.
+
+To enable this, `server.py` needs a static file mount added at the end of the file. This mount should:
+
+- Point to the `app/dist/` directory (where the Dockerfile copies the built frontend)
+- Use FastAPI's `StaticFiles` with HTML mode enabled, so that non-API route serves `index.html`
+- This must be added at the end of `server.py`. FastAPI matches routes top-to-bottom so if the static file handler (which catches all paths) is registered before the `/api` routes, API requests would incorrectly be handled and fail

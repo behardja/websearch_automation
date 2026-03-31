@@ -118,7 +118,6 @@ const SingleFilePanel: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewStep>("upload");
 
   // Upload step
-  const [selectedState, setSelectedState] = useState("TX");
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const filePreviewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
@@ -146,23 +145,18 @@ const SingleFilePanel: React.FC = () => {
   };
 
   const handleUploadNext = async () => {
-    if (!file) {
-      // No file — go to review with empty fields for manual entry
-      setFields({ ...EMPTY_FIELDS, state: { value: selectedState, confidence: 1 } });
-      setExtractionError(null);
-      setCurrentView("review");
-      return;
-    }
+    if (!file) return;
 
     setExtracting(true);
     setExtractionError(null);
     try {
-      const resp = await extractDocument(file, selectedState);
+      const resp = await extractDocument(file, "");
       if (resp.error || !resp.fields) {
         setExtractionError(resp.error || "No fields returned");
-        setFields({ ...EMPTY_FIELDS, state: { value: selectedState, confidence: 1 } });
+        setFields({ ...EMPTY_FIELDS });
       } else {
         const f = resp.fields;
+        const resolvedState = f.state?.value || "";
         setFields({
           license_number: f.license_number || EMPTY_FIELD,
           doing_business_as: f.doing_business_as || EMPTY_FIELD,
@@ -171,9 +165,14 @@ const SingleFilePanel: React.FC = () => {
           expiration_date: f.expiration_date || EMPTY_FIELD,
           address: f.address || EMPTY_FIELD,
           city: f.city || EMPTY_FIELD,
-          state: f.state?.value ? f.state : { value: selectedState, confidence: 1 },
+          state: resolvedState
+            ? { value: resolvedState, confidence: f.state?.confidence ?? 1 }
+            : EMPTY_FIELD,
           jurisdiction: f.jurisdiction || EMPTY_FIELD,
         });
+        if (!resolvedState) {
+          setExtractionError("Could not detect state from document. Please select one below.");
+        }
       }
       setCurrentView("review");
     } catch (err: any) {
@@ -268,22 +267,6 @@ const SingleFilePanel: React.FC = () => {
               </p>
             </div>
 
-            {/* State selector */}
-            <div className="mb-5">
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">State</label>
-              <select
-                value={selectedState}
-                onChange={(e) => setSelectedState(e.target.value)}
-                className="w-full px-3 py-2.5 border border-[#3a3d45] rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                {STATE_OPTIONS.map((s) => (
-                  <option key={s.code} value={s.code}>
-                    {s.name} ({s.tag})
-                  </option>
-                ))}
-              </select>
-            </div>
-
             {/* File upload */}
             <div className="mb-6">
               <label className="block text-sm font-medium text-slate-300 mb-1.5">License File</label>
@@ -324,7 +307,7 @@ const SingleFilePanel: React.FC = () => {
 
             <button
               onClick={handleUploadNext}
-              disabled={extracting}
+              disabled={extracting || !file}
               className="w-full py-3 bg-primary text-white font-bold text-sm rounded-lg hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >
               {extracting ? (
@@ -335,7 +318,7 @@ const SingleFilePanel: React.FC = () => {
               ) : (
                 <>
                   <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
-                  {file ? "Extract & Review Fields" : "Enter Fields Manually"}
+                  Extract & Process
                 </>
               )}
             </button>
@@ -344,12 +327,6 @@ const SingleFilePanel: React.FC = () => {
               <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
                 <strong>Extraction error:</strong> {extractionError}
               </div>
-            )}
-
-            {!file && (
-              <p className="text-xs text-center text-slate-500 mt-3">
-                No file? You can still enter the license fields manually on the next step.
-              </p>
             )}
           </div>
         </div>
@@ -613,31 +590,43 @@ const SingleFilePanel: React.FC = () => {
                   </div>
                 );
               })()}
-              <div className="w-20">
+              <div className="w-24">
                 <div className="flex items-center gap-2 mb-1">
                   <label className="text-sm font-medium text-slate-300">State</label>
                 </div>
-                <input
-                  type="text"
+                <select
                   value={fields.state.value}
-                  disabled
-                  className="w-full px-3 py-2 border border-[#2a2d35] rounded-lg text-sm bg-[#1a1d23] text-slate-500 font-mono"
-                />
+                  onChange={(e) => updateField("state", e.target.value)}
+                  className="w-full px-2 py-2 border border-[#3a3d45] rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                >
+                  <option value="">—</option>
+                  {STATE_OPTIONS.map((s) => (
+                    <option key={s.code} value={s.code}>
+                      {s.code}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
-            {/* Jurisdiction (read-only context) */}
-            {fields.jurisdiction.value && (
-              <div>
-                <label className="block text-sm font-medium text-slate-500 mb-1">Jurisdiction</label>
-                <input
-                  type="text"
-                  value={fields.jurisdiction.value}
-                  disabled
-                  className="w-full px-3 py-2 border border-[#2a2d35] rounded-lg text-sm bg-[#1a1d23] text-slate-500"
-                />
-              </div>
-            )}
+            {/* Jurisdiction */}
+            {(() => {
+              const cc = confidenceColor(fields.jurisdiction.confidence);
+              return (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-sm font-medium text-slate-300">Jurisdiction</label>
+                    <span className={`w-2 h-2 rounded-full ml-auto ${cc.dot}`}></span>
+                  </div>
+                  <input
+                    type="text"
+                    value={fields.jurisdiction.value}
+                    onChange={(e) => updateField("jurisdiction", e.target.value)}
+                    className={`w-full px-3 py-2 border ${cc.border} rounded-lg text-sm bg-[#2a2d35] text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/50`}
+                  />
+                </div>
+              );
+            })()}
           </div>
 
           {/* Verification method selector */}
