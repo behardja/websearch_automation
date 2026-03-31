@@ -10,11 +10,11 @@ Upload a license document → Document AI extracts fields → Human reviews (HIT
 
 ### Defense Lines
 
-| Line | Method | Tech | Description |
-|------|--------|------|-------------|
-| **1st** | HTTP Direct | `httpx` | POST to the state search endpoint. Fastest, lowest overhead. |
-| **2nd** | Browser Automation | `playwright` | Fill form fields and parse DOM. Fallback when HTTP is blocked. |
-| **3rd** | AI Agent (Computer Use) | `google-adk` + `gemini-2.5-computer-use` | Gemini visually browses the site like a human. Most resilient but slowest. |
+| Line | Method | Description |
+|------|--------|-------------|
+| **1st** | HTTP Direct | POST to the state search endpoint. Fastest, lowest overhead. |
+| **2nd** | Browser Automation | Fill form fields and parse DOM. Fallback when HTTP is blocked. |
+| **3rd** | AI Agent (Computer Use) | Gemini visually browses the site like a human. Most resilient but slowest. |
 
 Safety limits on Method 3: max 25 steps and 180s timeout to prevent runaway token usage.
 
