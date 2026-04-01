@@ -1,6 +1,7 @@
 # Alcohol License Verification — Web Search Automation
 
 Automated verification of alcohol licenses against state government websites, implementing a **3 Lines of Defense** strategy. Supports Texas (TABC), Florida (DBPR), and Georgia (DOR).
+The app defaults to the pretrained foundation model endpoint for initial setup. The original evaluation was done using a fine-tuned model trained on labeled license data from TX, FL, and GA.
 
 ## Architecture
 
@@ -122,7 +123,14 @@ terraform plan
 terraform apply
 ```
 
-Variables are in `terraform/terraform.tfvars`. The Document AI custom extractor processor is managed outside Terraform (referenced by ID in `backend/document_ai.py`).
+Variables are in `terraform/terraform.tfvars`. The Document AI processor is managed outside Terraform (referenced by ID in `backend/document_ai.py`).
+
+To tear down all Terraform-managed resources:
+
+```bash
+cd terraform
+terraform destroy
+```
 
 ## Containerization preparation for Deployment
 

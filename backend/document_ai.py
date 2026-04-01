@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ID = "757654702990"
 LOCATION = "us"
 PROCESSOR_ID = "d426bbd65fc4de7d"
-PROCESSOR_VERSION = "dc75b1a1b698c784"
+PROCESSOR_VERSION = "pretrained-foundation-model-v1.6-2026-01-13"
 
 EXPECTED_FIELDS = [
     "doing_business_as",
