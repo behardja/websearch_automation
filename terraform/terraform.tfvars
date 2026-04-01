@@ -1,0 +1,5 @@
+project_id          = "sandbox-401718"
+region              = "us-central1"
+gcs_bucket_name     = "alcohol-license-documents"
+gcs_bucket_location = "US"
+service_account_id  = "alcohol-license-verifier"

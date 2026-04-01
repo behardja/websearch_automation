@@ -111,6 +111,19 @@ python -m backend.defense_line_2_scraper --license 200034858
 python -m backend.defense_line_3_agent --license 200034858
 ```
 
+## Terraform — Infrastructure Setup
+
+Terraform provisions the GCP resources the app depends on: API enablement, service account with IAM roles, and a GCS bucket for batch mode.
+
+```bash
+cd terraform
+terraform init
+terraform plan
+terraform apply
+```
+
+Variables are in `terraform/terraform.tfvars`. The Document AI custom extractor processor is managed outside Terraform (referenced by ID in `backend/document_ai.py`).
+
 ## Containerization preparation for Deployment
 
 Build and push to Registry using the following:
