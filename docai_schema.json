@@ -1,0 +1,58 @@
+[
+  {
+    "name": "doing_business_as",
+    "dataType": "Plain text",
+    "method": "Extract",
+    "occurrence": "Optional once",
+    "enabled": true,
+    "description": "The trade name, DBA, or 'Doing Business As' name of the establishment. This is often the store name"
+  },
+  {
+    "name": "expiration_date",
+    "dataType": "Datetime",
+    "method": "Extract",
+    "occurrence": "Optional once",
+    "enabled": true,
+    "description": "The date when the license or permit expires"
+  },
+  {
+    "name": "jurisdiction",
+    "dataType": "Plain text",
+    "method": "Extract",
+    "occurrence": "Optional once",
+    "enabled": true,
+    "description": "Government agency, state department, or commission issuing the license (e.g., Texas Alcoholic Beverage Commission, Florida DBPR)"
+  },
+  {
+    "name": "legal_name",
+    "dataType": "Plain text",
+    "method": "Extract",
+    "occurrence": "Optional once",
+    "enabled": true,
+    "description": "The official registered legal name of the entity, business, or individual holding the license (e.g., LLC, INC)"
+  },
+  {
+    "name": "license_number",
+    "dataType": "Plain text",
+    "method": "Extract",
+    "occurrence": "Optional once",
+    "enabled": true,
+    "description": "The unique alphanumeric license, permit, or certification number assigned to the business (e.g., 200034858, BEV1615666)"
+  },
+  {
+    "name": "license_type",
+    "dataType": "Plain text",
+    "method": "Extract",
+    "occurrence": "Optional once",
+    "enabled": true,
+    "description": "The specific class, category, or permit type of the issued license"
+  },
+  {
+    "name": "location_address",
+    "dataType": "Address",
+    "method": "Extract",
+    "occurrence": "Optional once",
+    "enabled": true,
+    "description": "The physical street address, city, state, and zip code of the licensed business location"
+  }
+]

@@ -1,13 +1,12 @@
 # Alcohol License Verification — Web Search Automation
 
 Automated verification of alcohol licenses against state government websites, implementing a **3 Lines of Defense** strategy. Supports Texas (TABC), Florida (DBPR), and Georgia (DOR).
-The app defaults to the pretrained foundation model endpoint for initial setup. The original evaluation was done using a fine-tuned model trained on labeled license data from TX, FL, and GA.
+
+Note: The app defaults to the pretrained foundation model endpoint for initial setup. The original evaluation was done using a fine-tuned model trained on labeled license data from TX, FL, and GA.
 
 ## Architecture
 
 Upload a license document → Document AI extracts fields → Human reviews (HITL) → Cascade verification against state website.
-
-![Solution Architecture](imgs/flow.png)
 
 ### Defense Lines
 
@@ -85,6 +84,27 @@ export GOOGLE_GENAI_USE_VERTEXAI=1
 
 Or use a `.env` file in the project root.
 
+## Terraform — Infrastructure Setup
+
+Terraform provisions all GCP resources: API enablement, service account with IAM roles, GCS bucket for batch mode, and the Document AI Custom Extractor processor with its extraction schema (from `docai_schema.json`).
+
+```bash
+cd terraform
+terraform init
+terraform apply
+```
+
+This creates the processor, configures the schema, and writes `backend/docai_config.json` so the app can find the processor at runtime. Variables are in `terraform/terraform.tfvars`.
+
+To tear down all Terraform-managed resources:
+
+```bash
+cd terraform
+terraform destroy
+```
+
+## Getting Started
+
 ### Install & Run
 
 ```bash
@@ -110,26 +130,6 @@ App runs at [http://localhost:3000](http://localhost:3000).
 python -m backend.defense_line_1_http --license 200034858
 python -m backend.defense_line_2_scraper --license 200034858
 python -m backend.defense_line_3_agent --license 200034858
-```
-
-## Terraform — Infrastructure Setup
-
-Terraform provisions the GCP resources the app depends on: API enablement, service account with IAM roles, and a GCS bucket for batch mode.
-
-```bash
-cd terraform
-terraform init
-terraform plan
-terraform apply
-```
-
-Variables are in `terraform/terraform.tfvars`. The Document AI processor is managed outside Terraform (referenced by ID in `backend/document_ai.py`).
-
-To tear down all Terraform-managed resources:
-
-```bash
-cd terraform
-terraform destroy
 ```
 
 ## Containerization preparation for Deployment
@@ -176,3 +176,30 @@ To enable this, `server.py` needs a static file mount added at the end of the fi
 - Point to the `app/dist/` directory (where the Dockerfile copies the built frontend)
 - Use FastAPI's `StaticFiles` with HTML mode enabled, so that non-API route serves `index.html`
 - This must be added at the end of `server.py`. FastAPI matches routes top-to-bottom so if the static file handler (which catches all paths) is registered before the `/api` routes, API requests would incorrectly be handled and fail
+
+## Tuning Instructions (optional)
+
+For better accuracy, you can fine-tune the model on labeled license data.
+
+### Extraction Schema
+
+The schema is defined in `docai_schema.json` and automatically configured on the processor during `terraform apply`. It defines the following fields:
+
+| Name | Data type | Occurrence | Description |
+| :--- | :--- | :--- | :--- |
+| `doing_business_as` | Plain text | Optional once | Trade name / DBA of the establishment |
+| `expiration_date` | Datetime | Optional once | License expiration date |
+| `jurisdiction` | Plain text | Optional once | Issuing government agency (e.g., TABC, Florida DBPR) |
+| `legal_name` | Plain text | Optional once | Registered legal name of the license holder |
+| `license_number` | Plain text | Optional once | Unique license/permit number (e.g., 200034858) |
+| `license_type` | Plain text | Optional once | License class or permit type |
+| `location_address` | Address | Optional once | Physical address of the licensed business |
+
+### Fine-Tuning Steps
+The exported dataset (`license_dataset.zip`) has been shared with the team.
+
+1. Upload the labeled data folders to a GCS bucket
+2. [Import the pre-labeled documents](https://cloud.google.com/document-ai/docs/label-documents#import-labels) into the Custom Extractor's respective `Train` and `Test` datasets
+3. [Tune  a new processor version](https://cloud.google.com/document-ai/docs/training-overview) from the Document AI console
+4. Set the trained version as the default on the processor
+

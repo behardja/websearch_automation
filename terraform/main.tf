@@ -6,6 +6,14 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
   }
 }
 
@@ -69,8 +77,34 @@ resource "google_storage_bucket" "documents" {
 }
 
 # ---------------------------------------------------------------------------
-# Note: Document AI Processor
+# Document AI Processor — automated setup
 # ---------------------------------------------------------------------------
-# The Document AI custom extractor (processor d426bbd65fc4de7d in project
-# 757654702990) is pre-trained and configured outside of Terraform.
-# It is referenced by ID in backend/document_ai.py.
+# Creates the Custom Extractor processor, configures the schema from
+# docai_schema.json using the Foundation Model, and writes
+# backend/docai_config.json so the app can find the processor at runtime.
+#
+# Re-runs automatically when docai_schema.json changes.
+
+# Allow time for the Document AI API to propagate after enablement
+resource "time_sleep" "wait_for_docai_api" {
+  depends_on      = [google_project_service.apis]
+  create_duration = "60s"
+}
+
+resource "null_resource" "docai_setup" {
+  depends_on = [time_sleep.wait_for_docai_api]
+
+  triggers = {
+    schema_hash = filesha256("${path.module}/../docai_schema.json")
+  }
+
+  provisioner "local-exec" {
+    working_dir = "${path.module}/.."
+    command     = "python3 scripts/setup_docai.py --force"
+
+    environment = {
+      PROJECT_ID = var.project_id
+      GCS_BUCKET = var.gcs_bucket_name
+    }
+  }
+}
